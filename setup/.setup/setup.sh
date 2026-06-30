@@ -13,6 +13,7 @@ readonly BASE_PACKAGE_LIST=(
     tmux
     gpg
     pipx
+    fzf
 )
 
 readonly DEVELOP_PACKAGE_LIST=()

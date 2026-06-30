@@ -14,9 +14,6 @@ shell = "zsh"
 
 [plugins]
 
-[plugins.zsh-syntax-highlighting]
-github = 'zsh-users/zsh-syntax-highlighting'
-
 [plugins.zsh-autosuggestions]
 github = 'zsh-users/zsh-autosuggestions'
 
@@ -40,16 +37,13 @@ add_fpath /opt/homebrew/share/zsh/site-functions
 plugins=(
     git
     pip
-    command-not-found
     rust
-    screen
     docker
-    docker-compose
     pyenv
     z
     brew
     poetry
-    fnm
+    tmux
 )
 '''
 

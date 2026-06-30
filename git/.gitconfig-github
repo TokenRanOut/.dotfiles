@@ -1,7 +1,7 @@
 [user]
 	email = yejun.code@gmail.com
 	name = Ye Jun
-	signingkey = BFD100E7
+	signingkey = CA553E41637B4C78
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
