@@ -1,7 +1,7 @@
 #!/bin/bash
 
-GIT_URL="git@github.com:PlayByMyself/.dotfiles.git"
-HTTP_URL="https://github.com/PlayByMyself/.dotfiles.git"
+GIT_URL="git@github.com:TokenRanOut/.dotfiles.git"
+HTTP_URL="https://github.com/TokenRanOut/.dotfiles.git"
 
 github_auth() {
     ssh -T github.com

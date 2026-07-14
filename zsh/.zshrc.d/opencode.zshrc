@@ -1,2 +1,3 @@
 # opencode
 export PATH="$HOME/.opencode/bin:$PATH"
+alias opencode="HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=localhost,127.0.0.1 opencode"

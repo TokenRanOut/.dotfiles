@@ -1,0 +1,127 @@
+[
+  {
+    "query": "帮我在知识库里搜索一下关于部署流程的笔记",
+    "should_trigger": true,
+    "note": "显式提'知识库'，对应push关键词"
+  },
+  {
+    "query": "我有个obsidian vault，帮我找一下关于React hooks的笔记内容",
+    "should_trigger": true,
+    "note": "直接提obsidian vault"
+  },
+  {
+    "query": "搜索我的第二大脑里有没有Golang并发相关的文章",
+    "should_trigger": true,
+    "note": "用'第二大脑'替代关键词，测试push覆盖"
+  },
+  {
+    "query": "在obsidian里创建一篇新笔记，标题是Docker部署踩坑记录",
+    "should_trigger": true,
+    "note": "创建笔记任务"
+  },
+  {
+    "query": "帮我看看今天日记里写了什么",
+    "should_trigger": true,
+    "note": "每日日记读取，隐含obsidian"
+  },
+  {
+    "query": "查一下我的笔记里哪些文档引用了'部署指南'这篇",
+    "should_trigger": true,
+    "note": "backlinks查询，没提obsidian但应触发"
+  },
+  {
+    "query": "把这篇关于Nginx配置的笔记打上标签 server,devops",
+    "should_trigger": true,
+    "note": "property set任务，隐含obsidian"
+  },
+  {
+    "query": "我的vault里有哪些没有incoming链接的孤立笔记？",
+    "should_trigger": true,
+    "note": "用vault术语但没提obsidian，orphans查询"
+  },
+  {
+    "query": "帮我在日记里追加一条今天的TODO",
+    "should_trigger": true,
+    "note": "日记追加操作"
+  },
+  {
+    "query": "在我的笔记库里搜索一下Kubernetes，看看有几篇相关的",
+    "should_trigger": true,
+    "note": "'笔记库'替代关键词"
+  },
+  {
+    "query": "给obsidian里的那篇Python异步编程笔记添加一个tags属性",
+    "should_trigger": true,
+    "note": "明确obsidian，property操作"
+  },
+  {
+    "query": "看看我笔记库里有几个待办任务还没完成",
+    "should_trigger": true,
+    "note": "tasks查询"
+  },
+  {
+    "query": "帮我列出obsidian中所有带frontend标签的笔记文件",
+    "should_trigger": true,
+    "note": "tags查询"
+  },
+  {
+    "query": "帮我找到vault里链接关系最密集的笔记，我想了解知识结构",
+    "should_trigger": true,
+    "note": "链接关系分析"
+  },
+  {
+    "query": "我忘记某篇笔记放哪了，只记得里面提到了Jenkins pipeline这个词，帮我找找",
+    "should_trigger": true,
+    "note": "典型搜索场景，没提obsidian但意图明确"
+  },
+  {
+    "query": "帮我在Notion里搜索一下项目计划相关的文档",
+    "should_trigger": false,
+    "note": "明确Notion，不应触发"
+  },
+  {
+    "query": "删除我的obsidian vault里那些过时的笔记",
+    "should_trigger": true,
+    "note": "删除操作，现在允许删除，应触发"
+  },
+  {
+    "query": "帮我安装obsidian的dataview插件",
+    "should_trigger": false,
+    "note": "插件管理，不应触发"
+  },
+  {
+    "query": "帮我把~/Documents/notes/下的markdown文件批量重命名",
+    "should_trigger": false,
+    "note": "直接文件系统操作，非通过CLI"
+  },
+  {
+    "query": "打开我的Bear应用，找一下本周的笔记",
+    "should_trigger": false,
+    "note": "明确Bear应用，不应触发"
+  },
+  {
+    "query": "帮我写一篇关于微服务架构的markdown文档",
+    "should_trigger": false,
+    "note": "写新文档但没说存到vault，不应触发"
+  },
+  {
+    "query": "我的obsidian主题太丑了，帮我换个好看的主题",
+    "should_trigger": false,
+    "note": "主题管理，不应触发"
+  },
+  {
+    "query": "帮我在apple notes里找昨天记的会议记录",
+    "should_trigger": false,
+    "note": "明确Apple Notes，不应触发"
+  },
+  {
+    "query": "同步一下我的obsidian vault到手机上",
+    "should_trigger": false,
+    "note": "sync操作(非status)，不应触发"
+  },
+  {
+    "query": "把obsidian vault里的导出为PDF发邮件给我老板",
+    "should_trigger": false,
+    "note": "接近但实际是导出/邮件任务，非CLI操作范围"
+  }
+]

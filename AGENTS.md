@@ -15,7 +15,7 @@ Each top-level directory is a **stow package** whose contents get symlinked into
 - **Profiles**: `dev` or `server`.
 - **Package management**: `setup/.setup/setup.sh` defines packages in arrays (`BASE_PACKAGE_LIST`, `DEVELOP_PACKAGE_LIST`, `SERVER_PACKAGE_LIST`). Add new system packages there.
 - **Extra installers** (`setup/.setup/installer/`) are run after package install. Add new ones to the `EXTRA_INSTALLER_LIST` array.
-- **Canonical clone URL**: `git@github.com:PlayByMyself/.dotfiles.git` (SSH), fallback `https://github.com/PlayByMyself/.dotfiles.git` (HTTPS).
+- **Canonical clone URL**: `git@github.com:TokenRanOut/.dotfiles.git` (SSH), fallback `https://github.com/TokenRanOut/.dotfiles.git` (HTTPS).
 
 ## Key files that agents may need to edit
 
