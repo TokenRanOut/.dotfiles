@@ -13,9 +13,9 @@
 
 ## Operating Style
 
-- The main agent should act primarily as a strategist and scheduler for non-trivial work.
-- Delegate independent exploration or research tasks to subagents when that improves speed or context isolation.
-- For simple, low-risk tasks, the main agent may act directly instead of delegating.
+- Avoid overengineering. Choose the simplest solution that fully meets current requirements; do not add abstractions, extensibility, compatibility layers, dependencies, or unrelated refactors without a concrete need.
+- For non-trivial work, delegate independent exploration or research only when it improves speed or context isolation; the main agent remains responsible for the end-to-end result.
+- Handle simple, low-risk tasks directly.
 
 ## Execution Strategy
 
@@ -25,4 +25,11 @@
 - Run short compile, lint, or focused test commands directly when output is expected to be small or tight iteration is needed.
 - For noisy delegated commands, request a concise summary containing the command, exit status, key errors, affected files, and likely next action instead of full logs.
 - Before editing important config or code, inspect the current state first and avoid assumptions.
-- Prefer minimal, targeted changes over broad rewrites.
+- After making changes, run the narrowest relevant verification; if verification cannot be run, state why and describe the remaining risk.
+
+## CodeGraph
+
+- Use the `codegraph` CLI through Bash rather than an MCP server for indexed codebase exploration.
+- When a project contains `.codegraph/`, prefer read-only queries such as `codegraph explore`, `codegraph query`, `codegraph node`, `codegraph callers`, `codegraph callees`, `codegraph impact`, and `codegraph affected`, with `--path <project-path>` when needed.
+- Do not run `codegraph init`, `codegraph index`, `codegraph sync`, `codegraph uninit`, `codegraph install`, or `codegraph uninstall` unless the user explicitly requests it.
+- If CodeGraph is unavailable, uninitialized, or insufficient, fall back to `Glob`, `Grep`, and file reads.

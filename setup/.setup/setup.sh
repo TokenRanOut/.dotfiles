@@ -14,6 +14,7 @@ readonly BASE_PACKAGE_LIST=(
     gpg
     pipx
     fzf
+    fzf-tab
 )
 
 readonly DEVELOP_PACKAGE_LIST=()

@@ -1,0 +1,173 @@
+#!/bin/bash
+
+set -o pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: gitsync [workspace ...]
+
+Find Git repositories under each workspace and fast-forward clean master
+branches from origin. The current directory is used when no workspace is given.
+EOF
+}
+
+repositories=()
+
+add_repository() {
+    local repository="$1"
+    local existing
+    local retained=()
+
+    for existing in "${repositories[@]}"; do
+        if [[ "$repository" == "$existing" || "$repository" == "$existing"/* ]]; then
+            return
+        fi
+
+        if [[ "$existing" != "$repository"/* ]]; then
+            retained+=("$existing")
+        fi
+    done
+
+    repositories=("${retained[@]}" "$repository")
+}
+
+discover_repositories() {
+    local workspace="$1"
+    local repository
+    local marker
+
+    if [[ ! -d "$workspace" ]]; then
+        printf '[FAILED]  %s: workspace does not exist\n' "$workspace"
+        failed=$((failed + 1))
+        return
+    fi
+
+    workspace=$(cd "$workspace" 2>/dev/null && pwd -P) || {
+        printf '[FAILED]  %s: workspace cannot be accessed\n' "$workspace"
+        failed=$((failed + 1))
+        return
+    }
+
+    repository=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null) || repository=""
+    if [[ -n "$repository" ]]; then
+        add_repository "$repository"
+        return
+    fi
+
+    while IFS= read -r -d '' marker; do
+        repository=$(git -C "${marker%/.git}" rev-parse --show-toplevel 2>/dev/null) || continue
+        add_repository "$repository"
+    done < <(find "$workspace" \( -type d -name .git -prune -print0 \) -o \( -type f -name .git -print0 \) 2>/dev/null)
+}
+
+sync_repository() {
+    local repository="$1"
+    local branch
+    local before
+    local after
+    local status
+
+    branch=$(git -C "$repository" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""
+    if [[ -z "$branch" ]]; then
+        if ! git -C "$repository" rev-parse --verify HEAD >/dev/null 2>&1; then
+            printf '[FAILED]  %s: cannot determine current branch\n' "$repository"
+            failed=$((failed + 1))
+            return
+        fi
+        printf '[SKIPPED] %s: current branch is detached HEAD\n' "$repository"
+        skipped=$((skipped + 1))
+        return
+    fi
+
+    if [[ "$branch" != "master" ]]; then
+        printf '[SKIPPED] %s: current branch is %s\n' "$repository" "$branch"
+        skipped=$((skipped + 1))
+        return
+    fi
+
+    status=$(git -C "$repository" status --porcelain 2>/dev/null) || {
+        printf '[FAILED]  %s: cannot determine working tree status\n' "$repository"
+        failed=$((failed + 1))
+        return
+    }
+
+    if [[ -n "$status" ]]; then
+        printf '[SKIPPED] %s: working tree is dirty\n' "$repository"
+        skipped=$((skipped + 1))
+        return
+    fi
+
+    if ! git -C "$repository" remote get-url origin >/dev/null 2>&1; then
+        printf '[FAILED]  %s: origin remote does not exist\n' "$repository"
+        failed=$((failed + 1))
+        return
+    fi
+
+    before=$(git -C "$repository" rev-parse HEAD 2>/dev/null) || {
+        printf '[FAILED]  %s: cannot resolve HEAD\n' "$repository"
+        failed=$((failed + 1))
+        return
+    }
+
+    if ! git -C "$repository" fetch --quiet --prune origin >/dev/null 2>&1; then
+        printf '[FAILED]  %s: fetch failed\n' "$repository"
+        failed=$((failed + 1))
+        return
+    fi
+
+    if ! git -C "$repository" show-ref --verify --quiet refs/remotes/origin/master; then
+        printf '[FAILED]  %s: origin/master does not exist\n' "$repository"
+        failed=$((failed + 1))
+        return
+    fi
+
+    if ! git -C "$repository" merge --quiet --ff-only origin/master >/dev/null 2>&1; then
+        printf '[FAILED]  %s: master cannot be fast-forwarded\n' "$repository"
+        failed=$((failed + 1))
+        return
+    fi
+
+    after=$(git -C "$repository" rev-parse HEAD 2>/dev/null) || {
+        printf '[FAILED]  %s: cannot resolve updated HEAD\n' "$repository"
+        failed=$((failed + 1))
+        return
+    }
+    if [[ "$before" == "$after" ]]; then
+        printf '[CURRENT] %s\n' "$repository"
+        current=$((current + 1))
+    else
+        printf '[UPDATED] %s\n' "$repository"
+        updated=$((updated + 1))
+    fi
+}
+
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+
+updated=0
+current=0
+skipped=0
+failed=0
+
+if [[ $# -eq 0 ]]; then
+    discover_repositories "$PWD"
+else
+    for workspace in "$@"; do
+        discover_repositories "$workspace"
+    done
+fi
+
+for repository in "${repositories[@]}"; do
+    sync_repository "$repository"
+done
+
+printf '\nUpdated: %d, Current: %d, Skipped: %d, Failed: %d\n' \
+    "$updated" "$current" "$skipped" "$failed"
+
+if [[ $failed -gt 0 ]]; then
+    exit 1
+fi

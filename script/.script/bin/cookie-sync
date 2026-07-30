@@ -1,0 +1,551 @@
+#!/usr/bin/env python
+"""cookie-sync — 宿主机 Chrome cookies 解密导出 + Docker Chrome CDP 注入。
+
+提供三个子命令：
+
+  export  从宿主机 Chrome 解密导出 cookies 为 JSON
+  inject  通过 CDP WebSocket 将 JSON cookies 注入 Docker Chrome
+  sync    一键导出宿主机 cookies 并直接注入 Docker Chrome（内存中转，不落盘）
+
+用法:
+  # 导出（输出 JSON 到 stdout 或 --output 文件）
+  cookie-sync export [--domains feishu.cn,*.larksuite.com] [--profile Default] [--playwright] [--output /path/to/file.json]
+  cookie-sync export --domains feishu.cn --playwright --output storage-state.json
+
+  # 注入（读文件或 stdin）
+  cookie-sync export --domains feishu.cn --output - | cookie-sync inject
+  cookie-sync inject cookies.json
+
+  # 一键同步（默认通过 /sessions 发现活跃会话并重连注入）
+  cookie-sync sync --domains feishu.cn --browser-url http://127.0.0.1:9223
+
+  # 禁用会话发现（回退到正常注入模式）
+  cookie-sync sync --domains feishu.cn --no-reconnect
+
+需安装: pip3 install cryptography websockets
+"""
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+import websockets
+
+SAMESITE_MAP = {-1: "None", 0: "None", 1: "Lax", 2: "Strict"}
+
+CHROME_EPOCH_OFFSET = 11644473600
+
+
+def normalize_browser_url(browser_url: str) -> str:
+    """返回带 scheme、host 和 port 的 Browserless HTTP endpoint。"""
+    parsed = urllib.parse.urlparse(browser_url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+    if parsed.port:
+        port = parsed.port
+    elif scheme in ("https", "wss"):
+        port = 443
+    else:
+        port = 80
+    return f"{scheme}://{host}:{port}"
+
+
+def browser_ws_url(browser_url: str, ws_url: str) -> str:
+    """将 Browserless 返回的内部 WebSocket 地址映射为可连接的外部地址。"""
+    external = urllib.parse.urlparse(normalize_browser_url(browser_url))
+    ws_scheme = "wss" if external.scheme == "https" else "ws"
+    parsed = urllib.parse.urlparse(ws_url)
+    if not parsed.hostname:
+        return ws_url
+    netloc = external.hostname
+    if external.port:
+        netloc = f"{netloc}:{external.port}"
+    return urllib.parse.urlunparse((ws_scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+
+# ============================================================
+# 导出部分
+# ============================================================
+
+def get_keychain_password() -> bytes:
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-a", "Chrome", "-s", "Chrome Safe Storage", "-w"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip().encode("utf-8")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: 无法从 Keychain 读取 Chrome 密钥: {e.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+
+def derive_aes_key(password: bytes) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA1(),
+        length=16,
+        salt=b"saltysalt",
+        iterations=1003,
+        backend=default_backend(),
+    )
+    return kdf.derive(password)
+
+
+def decrypt_cookie_value(encrypted_value: bytes, key: bytes, domain: str = "") -> str:
+    if not encrypted_value:
+        return ""
+    if encrypted_value[:3] in (b"v10", b"v11"):
+        encrypted_value = encrypted_value[3:]
+    else:
+        try:
+            return encrypted_value.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+    iv = b" " * 16
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    decrypted = decryptor.update(encrypted_value) + decryptor.finalize()
+    pad_len = decrypted[-1]
+    if 1 <= pad_len <= 16:
+        decrypted = decrypted[:-pad_len]
+    if len(decrypted) > 32 and domain:
+        expected_hash = hashlib.sha256(domain.encode("utf-8")).digest()
+        if decrypted[:32] == expected_hash:
+            decrypted = decrypted[32:]
+    return decrypted.decode("utf-8", errors="replace")
+
+
+def domain_matches(cookie_domain: str, filter_domain: str) -> bool:
+    clean_cookie = cookie_domain.lstrip(".")
+    if filter_domain.startswith("*."):
+        suffix = filter_domain[2:]
+        return cookie_domain == suffix or cookie_domain.endswith("." + suffix)
+    return cookie_domain == filter_domain \
+        or cookie_domain.endswith("." + filter_domain) \
+        or filter_domain.endswith("." + clean_cookie) \
+        or filter_domain == clean_cookie
+
+
+def chrome_to_unix(chrome_us: int) -> float:
+    if chrome_us <= 0:
+        return -1
+    return max(-1, chrome_us / 1_000_000 - CHROME_EPOCH_OFFSET)
+
+
+def do_export(args) -> list:
+    """读取宿主机 Chrome cookies DB，解密后返回 list[dict]。"""
+    filter_domains = []
+    if args.domains:
+        filter_domains = [d.strip() for d in args.domains.split(",") if d.strip()]
+
+    keychain_pw = get_keychain_password()
+    aes_key = derive_aes_key(keychain_pw)
+
+    cookies_db = Path.home() / "Library/Application Support/Google/Chrome" / args.profile / "Cookies"
+    if not cookies_db.exists():
+        print(f"Error: Cookies DB 不存在: {cookies_db}", file=sys.stderr)
+        sys.exit(1)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = tmp.name
+    shutil.copy2(cookies_db, tmp_path)
+
+    try:
+        conn = sqlite3.connect(tmp_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT host_key, name, CAST(encrypted_value AS BLOB), path, expires_utc,
+                   is_secure, is_httponly, samesite
+            FROM cookies
+        """)
+
+        cookies = []
+        skipped = 0
+        for row in cursor.fetchall():
+            host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite = row
+            if filter_domains:
+                if not any(domain_matches(host_key, d) for d in filter_domains):
+                    skipped += 1
+                    continue
+            value = decrypt_cookie_value(encrypted_value, aes_key, host_key)
+            cookies.append({
+                "domain": host_key,
+                "name": name,
+                "value": value,
+                "path": path,
+                "expires": chrome_to_unix(expires_utc),
+                "httpOnly": bool(is_httponly),
+                "secure": bool(is_secure),
+                "sameSite": SAMESITE_MAP.get(samesite, "None"),
+            })
+        conn.close()
+
+        if filter_domains:
+            print(f"过滤域名: {filter_domains}, 跳过 {skipped} 条", file=sys.stderr)
+        return cookies
+    finally:
+        os.unlink(tmp_path)
+
+
+def cmd_export(args):
+    cookies = do_export(args)
+    data = {"cookies": cookies, "origins": []} if args.playwright else cookies
+    json_output = json.dumps(data, ensure_ascii=False)
+    out = getattr(args, "output", "-")
+    if out == "-":
+        print(json_output)
+    else:
+        Path(out).write_text(json_output, encoding="utf-8")
+    print(f"导出完成: {len(cookies)} 条 cookies", file=sys.stderr)
+
+
+# ============================================================
+# 会话发现（重连到活跃 browserless 会话）
+# ============================================================
+
+def _fetch_sessions(browser_url: str) -> list:
+    endpoint = normalize_browser_url(browser_url)
+    with urllib.request.urlopen(f"{endpoint}/sessions", timeout=5) as resp:
+        sessions = json.loads(resp.read())
+    if not isinstance(sessions, list):
+        raise ValueError("/sessions 响应不是数组")
+    return sessions
+
+
+def _normalize_sessions(browser_url: str, sessions: list) -> list[dict]:
+    normalized_sessions = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        session = dict(s)
+        bwse = s.get("browserWSEndpoint", "")
+        if bwse:
+            session["browserWSEndpoint"] = browser_ws_url(browser_url, bwse)
+        normalized_sessions.append(session)
+    return normalized_sessions
+
+
+def discover_sessions(browser_url: str) -> list[dict]:
+    """从 /sessions 端点发现所有活跃 browserless 会话。
+
+    browserless 为每条连接创建独立 Chrome 实例。通过 /sessions 获取已有会话的
+    browserWSEndpoint，可重连到同一浏览器实例，实现 cookie 共享。
+    """
+    try:
+        sessions = _fetch_sessions(browser_url)
+    except Exception as e:
+        print(f"发现会话失败: {e}", file=sys.stderr)
+        return []
+
+    return _normalize_sessions(browser_url, sessions)
+
+
+def discover_session_urls(browser_url: str) -> list[str]:
+    """返回可重连的去重 WebSocket URL 列表。"""
+    return list(dict.fromkeys(
+        session["browserWSEndpoint"]
+        for session in discover_sessions(browser_url)
+        if session.get("browserWSEndpoint")
+    ))
+
+
+def cmd_sessions(args):
+    try:
+        sessions = _normalize_sessions(args.browser_url, _fetch_sessions(args.browser_url))
+    except Exception as e:
+        print(f"查询会话失败: {e}", file=sys.stderr)
+        sys.exit(1)
+    payload = {
+        "status": "ok",
+        "browserUrl": normalize_browser_url(args.browser_url),
+        "sessions": sessions,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+        return
+    print(f"活跃会话: {len(sessions)}")
+    for session in sessions:
+        print(session.get("browserWSEndpoint", "<missing browserWSEndpoint>"))
+
+
+# ============================================================
+# 注入部分
+# ============================================================
+
+class CdpConnection:
+    """封装 browser-level CDP 连接，支持 flatten 多路复用 session。
+
+    用单条读循环统一分发响应和事件，避免事件被吞。
+    """
+
+    def __init__(self, ws):
+        self.ws = ws
+        self._next_id = 1
+        self._responses: dict[int, dict] = {}
+        self._events: list[dict] = []
+
+    async def _reader(self):
+        while True:
+            raw = await self.ws.recv()
+            msg = json.loads(raw)
+            if "id" in msg:
+                self._responses[msg["id"]] = msg
+            elif "method" in msg:
+                self._events.append(msg)
+
+    async def send_cmd(self, method: str, params: dict = None, session_id: str = None) -> dict:
+        msg_id = self._next_id
+        self._next_id += 1
+        msg = {"id": msg_id, "method": method, "params": params or {}}
+        if session_id:
+            msg["sessionId"] = session_id
+        await self.ws.send(json.dumps(msg))
+        while msg_id not in self._responses:
+            await asyncio.sleep(0.01)
+        return self._responses.pop(msg_id)
+
+    async def wait_for_event(self, event_name: str) -> dict:
+        while True:
+            for i, evt in enumerate(self._events):
+                if evt.get("method") == event_name:
+                    return self._events.pop(i).get("params", {})
+            await asyncio.sleep(0.01)
+
+
+async def inject_cookies(ws_url: str, cookies: list) -> tuple[int, int]:
+    async with websockets.connect(ws_url, max_size=10 * 1024 * 1024) as ws:
+        cdp = CdpConnection(ws)
+        reader_task = asyncio.create_task(cdp._reader())
+
+        resp = await cdp.send_cmd("Target.getTargets")
+        targets = resp.get("result", {}).get("targetInfos", [])
+        page_target = next((t for t in targets if t.get("type") == "page"), None)
+        if not page_target:
+            print("Error: Target.getTargets 无 page target", file=sys.stderr)
+            reader_task.cancel()
+            return 0, len(cookies)
+        target_id = page_target["targetId"]
+        print(f"Target: {target_id} ({page_target.get('url', 'about:blank')})", file=sys.stderr)
+
+        await cdp.send_cmd("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+        params = await cdp.wait_for_event("Target.attachedToTarget")
+        session_id = params.get("sessionId")
+        if not session_id:
+            print(f"Error: attachToTarget 事件无 sessionId: {params}", file=sys.stderr)
+            reader_task.cancel()
+            return 0, len(cookies)
+        print(f"Session: {session_id}", file=sys.stderr)
+
+        await cdp.send_cmd("Network.enable", session_id=session_id)
+
+        success = 0
+        fail = 0
+        for cookie in cookies:
+            cparams = {
+                "name": cookie["name"],
+                "value": cookie["value"],
+                "domain": cookie["domain"],
+                "path": cookie.get("path", "/"),
+                "secure": cookie.get("secure", False),
+                "httpOnly": cookie.get("httpOnly", False),
+            }
+            same_site = cookie.get("sameSite", "None")
+            if same_site and same_site != "None":
+                cparams["sameSite"] = same_site
+            expires = cookie.get("expires", -1)
+            if expires and expires > 0:
+                cparams["expires"] = expires
+
+            resp = await cdp.send_cmd("Network.setCookie", cparams, session_id=session_id)
+            if resp.get("result", {}).get("success"):
+                success += 1
+            else:
+                fail += 1
+                print(f"注入失败: {cookie['name']}@{cookie['domain']}", file=sys.stderr)
+
+        reader_task.cancel()
+        return success, fail
+
+
+def run_inject(browser_url: str, cookies: list, ws_url: str = None) -> tuple[int, int]:
+    if ws_url:
+        print(f"CDP WebSocket (直连): {ws_url}", file=sys.stderr)
+    else:
+        try:
+            with urllib.request.urlopen(f"{browser_url}/json/version", timeout=5) as resp:
+                version = json.loads(resp.read())
+            ws_url = version.get("webSocketDebuggerUrl")
+        except Exception as e:
+            print(f"Error: 无法连接 {browser_url}/json/version: {e}", file=sys.stderr)
+            return 0, len(cookies)
+
+        if not ws_url:
+            print("Error: /json/version 无 webSocketDebuggerUrl", file=sys.stderr)
+            return 0, len(cookies)
+
+        print(f"CDP WebSocket (browser-level): {ws_url}", file=sys.stderr)
+
+    try:
+        return asyncio.run(inject_cookies(ws_url, cookies))
+    except Exception as e:
+        print(f"Error: WebSocket 连接失败: {e}", file=sys.stderr)
+        return 0, len(cookies)
+
+
+def load_cookies_input(cookies_file: str) -> list:
+    if cookies_file in ("-", None):
+        data = json.load(sys.stdin)
+    else:
+        with open(cookies_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("cookies"), list):
+        return data["cookies"]
+    print("Error: 输入必须是 cookies 数组或 Playwright storage state", file=sys.stderr)
+    sys.exit(1)
+
+
+def _resolve_inject_urls(args, ws_url: str) -> list[str]:
+    """根据参数决定注入模式：直接 URL > 会话重连 > 正常注入。"""
+    if ws_url:
+        return [ws_url]
+    no_reconnect = getattr(args, "no_reconnect", False)
+    if no_reconnect:
+        return []
+    session_urls = discover_session_urls(args.browser_url)
+    if session_urls:
+        print(f"发现 {len(session_urls)} 个活跃会话，通过重连注入", file=sys.stderr)
+        return session_urls
+    print("未发现活跃会话，回退到正常注入（新 Chrome 实例）", file=sys.stderr)
+    return []
+
+
+def cmd_inject(args):
+    cookies = load_cookies_input(args.cookies_file)
+    if not cookies:
+        print("无 cookies 可注入", file=sys.stderr)
+        sys.exit(0)
+    print(f"待注入 cookies: {len(cookies)} 条", file=sys.stderr)
+
+    ws_url = getattr(args, "ws_url", None)
+    inject_urls = _resolve_inject_urls(args, ws_url)
+
+    total_success = total_fail = 0
+    for url in inject_urls:
+        success, fail = run_inject(args.browser_url, cookies, ws_url=url)
+        total_success += success
+        total_fail += fail
+    if not inject_urls:
+        success, fail = run_inject(args.browser_url, cookies, ws_url=None)
+        total_success, total_fail = success, fail
+
+    print(f"注入完成: 成功 {total_success} / 失败 {total_fail} / 共 {len(cookies)}", file=sys.stderr)
+
+
+# ============================================================
+# sync：导出 + 注入 一条龙（内存中转，不落盘）
+# ============================================================
+
+def cmd_sync(args):
+    print(f"[sync] 从宿主机 Chrome 导出 cookies (profile={args.profile}, domains={args.domains})", file=sys.stderr)
+    cookies = do_export(args)
+    print(f"[sync] 导出 {len(cookies)} 条 cookies", file=sys.stderr)
+    if not cookies:
+        print("[sync] 无 cookies 可注入，结束", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"status": "no_cookies", "cookies": {"exported": 0, "success": 0, "failed": 0}}, ensure_ascii=False))
+        return
+
+    ws_url = getattr(args, "ws_url", None)
+    inject_urls = _resolve_inject_urls(args, ws_url)
+
+    total_success = total_fail = 0
+    for url in inject_urls:
+        success, fail = run_inject(args.browser_url, cookies, ws_url=url)
+        total_success += success
+        total_fail += fail
+    if not inject_urls:
+        success, fail = run_inject(args.browser_url, cookies, ws_url=None)
+        total_success, total_fail = success, fail
+
+    print(f"[sync] 完成: 成功 {total_success} / 失败 {total_fail} / 共 {len(cookies)}", file=sys.stderr)
+    if args.json:
+        print(json.dumps({
+            "status": "ok" if total_fail == 0 else "partial_failure",
+            "cookies": {
+                "exported": len(cookies),
+                "success": total_success,
+                "failed": total_fail,
+            },
+            "browserWSEndpoints": inject_urls,
+        }, ensure_ascii=False))
+
+
+# ============================================================
+# CLI
+# ============================================================
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="宿主机 Chrome cookies 解密导出 + Docker Chrome CDP 注入",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # export
+    p_export = sub.add_parser("export", help="导出宿主机 Chrome cookies 为 JSON")
+    p_export.add_argument("--domains", help="域名白名单，逗号分隔（支持 *.example.com）")
+    p_export.add_argument("--profile", default="Default", help="Chrome profile（默认 Default）")
+    p_export.add_argument("--playwright", action="store_true", help="输出 Playwright storage state 格式")
+    p_export.add_argument("--output", default="-", help="输出路径（- 为 stdout）")
+    p_export.set_defaults(func=cmd_export)
+
+    # inject
+    p_inject = sub.add_parser("inject", help="通过 CDP 注入 cookies 到 Docker Chrome")
+    p_inject.add_argument("cookies_file", nargs="?", default="-", help="cookies JSON 文件路径或 stdin（-）")
+    p_inject.add_argument("--browser-url", default="http://127.0.0.1:9223", help="CDP 端点（通过 /json/version 发现）")
+    p_inject.add_argument("--ws-url", help="直连 CDP WebSocket URL (跳过发现，与 --browser-url 互斥)")
+    p_inject.add_argument("--no-reconnect", action="store_true", help="禁用会话重连，始终创建新 Chrome 实例")
+    p_inject.set_defaults(func=cmd_inject)
+
+    # sync
+    p_sync = sub.add_parser("sync", help="一键导出 + 注入（内存中转）")
+    p_sync.add_argument("--domains", help="域名白名单，逗号分隔（支持 *.example.com）")
+    p_sync.add_argument("--profile", default="Default", help="Chrome profile（默认 Default）")
+    p_sync.add_argument("--browser-url", default="http://127.0.0.1:9223", help="CDP 端点（通过 /json/version 发现）")
+    p_sync.add_argument("--ws-url", help="直连 CDP WebSocket URL (跳过发现，与 --browser-url 互斥)")
+    p_sync.add_argument("--no-reconnect", action="store_true", help="禁用会话重连，始终创建新 Chrome 实例")
+    p_sync.add_argument("--json", action="store_true", help="将同步结果作为 JSON 输出到 stdout")
+    p_sync.set_defaults(func=cmd_sync)
+
+    # sessions
+    p_sessions = sub.add_parser("sessions", help="查询 Browserless 活跃会话（不读取 cookies）")
+    p_sessions.add_argument("--browser-url", default="http://127.0.0.1:9223", help="Browserless HTTP endpoint")
+    p_sessions.add_argument("--json", action="store_true", help="将会话信息作为 JSON 输出到 stdout")
+    p_sessions.set_defaults(func=cmd_sessions)
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
