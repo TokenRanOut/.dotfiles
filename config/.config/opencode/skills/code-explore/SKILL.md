@@ -15,10 +15,18 @@ description: 通用代码探索规则，定义如何使用 subagent 读取归纳
 1. **先理解再分析** — 不要假设项目结构，先探测再深入
 2. **位置精确到三级** — 代码引用必须包含 `模块/类名.方法名()` 和 `文件名:行号`，缺一不可
 
+## CodeGraph
+
+- 项目包含 `.codegraph/` 时，优先使用 CodeGraph MCP 进行索引代码探索。
+- 优先使用只读工具：`codegraph_explore`、`codegraph_query`、`codegraph_node`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact` 和 `codegraph_affected`。
+- CodeGraph 不可用、未初始化或信息不足时，回退到 `glob`、`grep` 和文件读取。
+- 除非用户明确要求，不执行 CodeGraph 初始化、索引、同步、移除、安装或卸载操作。
+
 ## 分工边界
 
 | 操作 | 执行者 | 说明 |
 |------|--------|------|
+| CodeGraph MCP 索引探索 | 主 agent | 在已初始化项目中定位符号和调用关系 |
 | grep / glob 搜索定位文件 | 主 agent | 轻量操作，不膨胀上下文 |
 | 读取并分析完整文件（>30行） | subagent (explore/general) | 主 agent 严禁直接 read |
 | 拼接分析结论 | 主 agent | 基于 subagent 返回的摘要 |

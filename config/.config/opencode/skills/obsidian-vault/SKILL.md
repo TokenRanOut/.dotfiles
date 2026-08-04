@@ -33,6 +33,7 @@ tags: obsidian,cli,vault,search,write,notes
 4. **不执行危险操作** — 禁止 `reload`、`restart`、`eval`、`dev:*`、`devtools`
 5. **写后验证** — 任何写操作后，用 `read` 或 `property:read` 确认内容落盘正确
 6. **标签与链接优先** — 创建或更新笔记（含日记）时，优先设置 tags 并添加 Markdown 链接（`[显示文本](相对路径.md)` 格式）。tags 位于文档开头 YAML frontmatter（通过 `property:set`），链接位于内容末尾。
+7. **Plan Mode 只读** — 当前处于 Plan Mode 时，Vault 只允许读取和分析。允许 `search`、`search:context`、`read`、`outline`、`tags`、`property:read`、`tasks`、`backlinks`、`links`、`history:read`、`diff` 等只读操作；禁止 `create`、`append`、`prepend`、`move`、`rename`、`delete`、`property:set`、`property:remove`、`task`、`template:insert`、`history:restore`、`base:create` 等写操作。不得通过 Bash、PTY、文件编辑工具、脚本或其他 Agent 绕过限制。写操作被拒绝后必须立即停止；用户要求修改笔记时，只输出拟修改路径、位置和内容，退出 Plan Mode 后才能落盘。
 
 ## 工作流程
 
@@ -176,6 +177,8 @@ tags: obsidian,cli,vault,search,write,notes
 - ❌ 同步操作（`sync` 除 `sync:status` 外）
 - ❌ `reload`、`restart`、`eval`、`dev:*`、`devtools`
 - ❌ Publish 命令（`publish:*`）
+- ❌ Plan Mode 下创建、覆盖、追加、删除、移动或修改任何 Vault 内容
+- ❌ Plan Mode 下通过其他工具绕过 Obsidian 写权限
 
 ## 示例
 
