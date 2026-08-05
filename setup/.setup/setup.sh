@@ -14,6 +14,7 @@ readonly BASE_PACKAGE_LIST=(
     gpg
     pipx
     fzf
+    direnv
 )
 
 readonly DEVELOP_PACKAGE_LIST=()
