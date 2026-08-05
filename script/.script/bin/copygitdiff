@@ -32,10 +32,18 @@ handle_error() {
 copy_to_clipboard() {
   local data=$1
   case "$OSTYPE" in
-    "darwin"*) echo "$data" | pbcopy ;;
-    "linux-gnu"*) echo "$data" | xclip -selection clipboard ;;
-    "cygwin"|"msys"|"win32") echo "$data" | clip ;;
-    *) echo "Unknown OS type" ;;
+    "darwin"*) printf '%s' "$data" | pbcopy ;;
+    "linux-gnu"*)
+      if command -v xclip >/dev/null 2>&1; then
+        printf '%s' "$data" | xclip -selection clipboard
+      elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$data" | wl-copy
+      else
+        return 1
+      fi
+      ;;
+    "cygwin"|"msys"|"win32") printf '%s' "$data" | clip ;;
+    *) return 1 ;;
   esac
 }
 
@@ -82,4 +90,4 @@ case "$lang" in
   *) git_diff_output="$git_diff" ;;
 esac
 
-copy_to_clipboard "$git_diff_output"
+copy_to_clipboard "$git_diff_output" || handle_error "Clipboard command is unavailable or failed"

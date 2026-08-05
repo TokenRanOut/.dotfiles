@@ -61,4 +61,5 @@ if [[ ${1:-} == "dev" || ${1:-} == "server" ]]; then
     change_shell_to_zsh || exit 1
 else
     echo "Usage: $0 [dev|server]"
+    exit 1
 fi

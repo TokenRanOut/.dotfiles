@@ -26,6 +26,7 @@
 """
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -48,6 +49,7 @@ import websockets
 SAMESITE_MAP = {-1: "None", 0: "None", 1: "Lax", 2: "Strict"}
 
 CHROME_EPOCH_OFFSET = 11644473600
+CDP_TIMEOUT = 10
 
 
 def normalize_browser_url(browser_url: str) -> str:
@@ -296,6 +298,7 @@ class CdpConnection:
         self._next_id = 1
         self._responses: dict[int, dict] = {}
         self._events: list[dict] = []
+        self._reader_task = None
 
     async def _reader(self):
         while True:
@@ -306,6 +309,24 @@ class CdpConnection:
             elif "method" in msg:
                 self._events.append(msg)
 
+    def start_reader(self):
+        self._reader_task = asyncio.create_task(self._reader())
+
+    async def close(self):
+        self._reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await self._reader_task
+
+    async def _wait_for(self, predicate, description: str):
+        deadline = asyncio.get_running_loop().time() + CDP_TIMEOUT
+        while not predicate():
+            if self._reader_task.done():
+                self._reader_task.result()
+                raise ConnectionError("CDP reader stopped")
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(f"Timed out waiting for {description}")
+            await asyncio.sleep(0.01)
+
     async def send_cmd(self, method: str, params: dict = None, session_id: str = None) -> dict:
         msg_id = self._next_id
         self._next_id += 1
@@ -313,71 +334,76 @@ class CdpConnection:
         if session_id:
             msg["sessionId"] = session_id
         await self.ws.send(json.dumps(msg))
-        while msg_id not in self._responses:
-            await asyncio.sleep(0.01)
+        await self._wait_for(lambda: msg_id in self._responses, f"{method} response")
         return self._responses.pop(msg_id)
 
     async def wait_for_event(self, event_name: str) -> dict:
-        while True:
+        event = None
+
+        def has_event():
+            nonlocal event
             for i, evt in enumerate(self._events):
                 if evt.get("method") == event_name:
-                    return self._events.pop(i).get("params", {})
-            await asyncio.sleep(0.01)
+                    event = self._events.pop(i).get("params", {})
+                    return True
+            return False
+
+        await self._wait_for(has_event, event_name)
+        return event
 
 
 async def inject_cookies(ws_url: str, cookies: list) -> tuple[int, int]:
     async with websockets.connect(ws_url, max_size=10 * 1024 * 1024) as ws:
         cdp = CdpConnection(ws)
-        reader_task = asyncio.create_task(cdp._reader())
+        cdp.start_reader()
+        try:
+            resp = await cdp.send_cmd("Target.getTargets")
+            targets = resp.get("result", {}).get("targetInfos", [])
+            page_target = next((t for t in targets if t.get("type") == "page"), None)
+            if not page_target:
+                print("Error: Target.getTargets 无 page target", file=sys.stderr)
+                return 0, len(cookies)
+            target_id = page_target["targetId"]
+            print(f"Target: {target_id} ({page_target.get('url', 'about:blank')})", file=sys.stderr)
 
-        resp = await cdp.send_cmd("Target.getTargets")
-        targets = resp.get("result", {}).get("targetInfos", [])
-        page_target = next((t for t in targets if t.get("type") == "page"), None)
-        if not page_target:
-            print("Error: Target.getTargets 无 page target", file=sys.stderr)
-            reader_task.cancel()
-            return 0, len(cookies)
-        target_id = page_target["targetId"]
-        print(f"Target: {target_id} ({page_target.get('url', 'about:blank')})", file=sys.stderr)
+            await cdp.send_cmd("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+            params = await cdp.wait_for_event("Target.attachedToTarget")
+            session_id = params.get("sessionId")
+            if not session_id:
+                print(f"Error: attachToTarget 事件无 sessionId: {params}", file=sys.stderr)
+                return 0, len(cookies)
+            print(f"Session: {session_id}", file=sys.stderr)
 
-        await cdp.send_cmd("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-        params = await cdp.wait_for_event("Target.attachedToTarget")
-        session_id = params.get("sessionId")
-        if not session_id:
-            print(f"Error: attachToTarget 事件无 sessionId: {params}", file=sys.stderr)
-            reader_task.cancel()
-            return 0, len(cookies)
-        print(f"Session: {session_id}", file=sys.stderr)
+            await cdp.send_cmd("Network.enable", session_id=session_id)
 
-        await cdp.send_cmd("Network.enable", session_id=session_id)
+            success = 0
+            fail = 0
+            for cookie in cookies:
+                cparams = {
+                    "name": cookie["name"],
+                    "value": cookie["value"],
+                    "domain": cookie["domain"],
+                    "path": cookie.get("path", "/"),
+                    "secure": cookie.get("secure", False),
+                    "httpOnly": cookie.get("httpOnly", False),
+                }
+                same_site = cookie.get("sameSite", "None")
+                if same_site and same_site != "None":
+                    cparams["sameSite"] = same_site
+                expires = cookie.get("expires", -1)
+                if expires and expires > 0:
+                    cparams["expires"] = expires
 
-        success = 0
-        fail = 0
-        for cookie in cookies:
-            cparams = {
-                "name": cookie["name"],
-                "value": cookie["value"],
-                "domain": cookie["domain"],
-                "path": cookie.get("path", "/"),
-                "secure": cookie.get("secure", False),
-                "httpOnly": cookie.get("httpOnly", False),
-            }
-            same_site = cookie.get("sameSite", "None")
-            if same_site and same_site != "None":
-                cparams["sameSite"] = same_site
-            expires = cookie.get("expires", -1)
-            if expires and expires > 0:
-                cparams["expires"] = expires
+                resp = await cdp.send_cmd("Network.setCookie", cparams, session_id=session_id)
+                if resp.get("result", {}).get("success"):
+                    success += 1
+                else:
+                    fail += 1
+                    print(f"注入失败: {cookie['name']}@{cookie['domain']}", file=sys.stderr)
 
-            resp = await cdp.send_cmd("Network.setCookie", cparams, session_id=session_id)
-            if resp.get("result", {}).get("success"):
-                success += 1
-            else:
-                fail += 1
-                print(f"注入失败: {cookie['name']}@{cookie['domain']}", file=sys.stderr)
-
-        reader_task.cancel()
-        return success, fail
+            return success, fail
+        finally:
+            await cdp.close()
 
 
 def run_inject(browser_url: str, cookies: list, ws_url: str = None) -> tuple[int, int]:
@@ -455,6 +481,8 @@ def cmd_inject(args):
         total_success, total_fail = success, fail
 
     print(f"注入完成: 成功 {total_success} / 失败 {total_fail} / 共 {len(cookies)}", file=sys.stderr)
+    if total_fail:
+        raise SystemExit(1)
 
 
 # ============================================================
@@ -494,6 +522,8 @@ def cmd_sync(args):
             },
             "browserWSEndpoints": inject_urls,
         }, ensure_ascii=False))
+    if total_fail:
+        raise SystemExit(1)
 
 
 # ============================================================

@@ -1,59 +1,67 @@
 #!/bin/bash
-# Function to display usage
-function usage() {
-    echo "Usage: $0 [options] [hostname] [ip-address]"
-    echo "Options:"
-    echo "-s [hostname] [ip-address]   Set the IP address for a hostname."
-    echo "-d [hostname]                Delete the entry for a hostname."
-    echo "-l                           List all entries in the hosts file."
+usage() {
+    echo "Usage: $0 {-s hostname ip-address|-d hostname|-l}"
     exit 1
 }
 
-# Check if the script is run as root
+[[ $# -gt 0 ]] || usage
+
+case "$1" in
+    -l)
+        [[ $# -eq 1 ]] || usage
+        cat /etc/hosts
+        exit 0
+        ;;
+    -s)
+        [[ $# -eq 3 && -n $2 && -n $3 && $2 != *[[:space:]#]* && $3 != *[[:space:]#]* ]] || usage
+        action=set
+        hostname=$2
+        ip_address=$3
+        ;;
+    -d)
+        [[ $# -eq 2 && -n $2 && $2 != *[[:space:]#]* ]] || usage
+        action=delete
+        hostname=$2
+        ;;
+    *)
+        usage
+        ;;
+esac
+
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
+    echo "This script must be run as root"
+    exit 1
 fi
 
-# Create a temporary file
-temp_file=$(mktemp /etc/hosts.XXXXXX)
+temp_file=$(mktemp /etc/hosts.XXXXXX) || exit 1
 trap 'rm -f "$temp_file"' EXIT
+cp -p /etc/hosts "$temp_file" || exit 1
 
-# Get the action and parameters
-while getopts "s:d:l" opt; do
-  case $opt in
-    s)
-      hostname=$OPTARG
-      shift $((OPTIND-1))
-      ip_address=$1
-      shift
-      cp -p /etc/hosts "$temp_file" && awk -v ip="$ip_address" -v host="$hostname" '
-          BEGIN {found=0}
-          $1 !~ /^#/ {
-              for (i = 2; i <= NF; i++) {
-                  if ($i == host) {print ip, host; found=1; next}
-              }
-          }
-          {print}
-          END {if (!found) print ip, host}
-      ' /etc/hosts > "$temp_file" && mv "$temp_file" /etc/hosts
-      ;;
-    d)
-      hostname=$OPTARG
-      cp -p /etc/hosts "$temp_file" && awk -v host="$hostname" '
-          $1 !~ /^#/ {
-              for (i = 2; i <= NF; i++) {
-                  if ($i == host) {next}
-              }
-          }
-          {print}
-      ' /etc/hosts > "$temp_file" && mv "$temp_file" /etc/hosts
-      ;;
-    l)
-      cat /etc/hosts
-      ;;
-    \?)
-      usage
-      ;;
-  esac
-done
+awk -v action="$action" -v ip="$ip_address" -v host="$hostname" '
+    $1 !~ /^#/ {
+        found = 0
+        aliases = 0
+        output = $1
+        comment = ""
+        for (i = 2; i <= NF; i++) {
+            if ($i == "#") {
+                for (; i <= NF; i++) comment = comment (comment ? " " : "") $i
+                break
+            }
+            if ($i == host) {
+                found = 1
+                continue
+            }
+            output = output " " $i
+            aliases++
+        }
+        if (found) {
+            if (aliases) print output (comment ? " " comment : "")
+            else if (comment) print comment
+            next
+        }
+    }
+    { print }
+    END { if (action == "set") print ip, host }
+' /etc/hosts > "$temp_file" || exit 1
+mv "$temp_file" /etc/hosts

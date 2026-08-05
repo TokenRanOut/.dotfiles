@@ -29,12 +29,18 @@ readonly SERVER_PACKAGE_LIST=(
 readonly EXTRA_INSTALLER_LIST=(
     cargo-install.sh
     pipx-install.sh
+    vim-install.sh
+    cookie-sync-install.sh
 )
 
 # Define package manager settings
 init_package_manager() {
     case "$OSTYPE" in
         freebsd*)
+            command -v sudo >/dev/null 2>&1 || {
+                echo "sudo is required; install it as root before running this script"
+                exit 1
+            }
             MANAGER_COMMAND=(sudo pkg)
             MANAGER_INSTALL=(install -y)
             MANAGER_UPDATE=(update)
@@ -43,7 +49,11 @@ init_package_manager() {
             )
             ;;
         linux-gnu*)
-            if type -p apt-get >/dev/null; then
+            command -v sudo >/dev/null 2>&1 || {
+                echo "sudo is required; install it as root before running this script"
+                exit 1
+            }
+            if command -v apt-get >/dev/null 2>&1; then
                 MANAGER_COMMAND=(sudo apt-get)
                 MANAGER_INSTALL=(install -y)
                 MANAGER_UPDATE=(update)
@@ -52,7 +62,7 @@ init_package_manager() {
                     libssl-dev
                     sudo
                 )
-            elif type -p yum >/dev/null; then
+            elif command -v yum >/dev/null 2>&1; then
                 MANAGER_COMMAND=(sudo yum)
                 MANAGER_INSTALL=(install -y)
                 MANAGER_UPDATE=(makecache)
@@ -61,10 +71,10 @@ init_package_manager() {
                     openssl-devel
                     sudo
                 )
-            elif type -p pacman >/dev/null; then
+            elif command -v pacman >/dev/null 2>&1; then
                 MANAGER_COMMAND=(sudo pacman)
                 MANAGER_INSTALL=(-S --noconfirm --needed)
-                MANAGER_UPDATE=(-Sy)
+                MANAGER_UPDATE=(-Syu --noconfirm --needed)
                 MANAGER_PACKAGE_LIST=(
                     base-devel
                     sudo
@@ -75,7 +85,7 @@ init_package_manager() {
             fi
             ;;
         darwin*)
-            if type -p brew >/dev/null; then
+            if command -v brew >/dev/null 2>&1; then
                 MANAGER_COMMAND=(brew)
                 MANAGER_INSTALL=(install)
                 MANAGER_UPDATE=(update)
@@ -120,9 +130,7 @@ init_sheldon() {
 }
 
 stow_dotfiles() {
-    cd "$HOME/.dotfiles" || return 1
-    stow --ignore=".DS_Store" -S */ || return 1
-    cd - >/dev/null
+    bash "$HOME/.dotfiles/script/.script/bin/dotfile" stow
 }
 
 exit_if_root() {
@@ -136,7 +144,7 @@ exit_if_root() {
 exit_if_root
 init_package_manager
 init_sheldon || exit 1
-PROFILE="$1"
+PROFILE="${1:-}"
 install_packages "$PROFILE" || exit 1
 for installer in "${EXTRA_INSTALLER_LIST[@]}"; do
     bash "$(dirname "$0")/installer/$installer" "$PROFILE" || exit 1

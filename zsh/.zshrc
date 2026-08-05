@@ -32,8 +32,6 @@ add_fpath() {
   return "$result"
 }
 
-
-
 # source all .zshrc files in .zshrc.d directory
 zsh_rc_dir="$HOME/.zshrc.d"
 for rc_file in "$zsh_rc_dir"/*.zshrc(N); do
