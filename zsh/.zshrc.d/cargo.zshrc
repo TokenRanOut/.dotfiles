@@ -1,3 +1,3 @@
-if [[ -f ~/.cargo/env ]]; then
-    source ~/.cargo/env
+if [[ -f "$HOME/.cargo/env" ]]; then
+    source "$HOME/.cargo/env"
 fi

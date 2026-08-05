@@ -40,6 +40,6 @@ unset -f _nvm_add_default_bin
 # Only the nvm shell function itself needs nvm.sh.
 nvm() {
   unset -f nvm
-  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+  [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
   nvm "$@"
 }

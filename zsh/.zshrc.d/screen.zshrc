@@ -1,4 +1,4 @@
-if type -p screen >/dev/null 2>&1; then
-    export SCREENDIR=$HOME/.screen
-    [[ -d $SCREENDIR ]] || mkdir -p -m 700 $SCREENDIR
+if has_command screen; then
+    export SCREENDIR="$HOME/.screen"
+    mkdir -p -m 700 "$SCREENDIR"
 fi
