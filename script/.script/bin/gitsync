@@ -6,8 +6,9 @@ usage() {
     cat <<'EOF'
 Usage: gitsync [workspace ...]
 
-Find Git repositories under each workspace and fast-forward clean master
-branches from origin. The current directory is used when no workspace is given.
+Find Git repositories under each workspace and fast-forward the clean local
+branch matching origin's default branch. The current directory is used when no
+workspace is given.
 EOF
 }
 
@@ -66,6 +67,8 @@ sync_repository() {
     local before
     local after
     local status
+    local default_ref
+    local default_branch
 
     branch=$(git -C "$repository" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""
     if [[ -z "$branch" ]]; then
@@ -75,12 +78,6 @@ sync_repository() {
             return
         fi
         printf '[SKIPPED] %s: current branch is detached HEAD\n' "$repository"
-        skipped=$((skipped + 1))
-        return
-    fi
-
-    if [[ "$branch" != "master" ]]; then
-        printf '[SKIPPED] %s: current branch is %s\n' "$repository" "$branch"
         skipped=$((skipped + 1))
         return
     fi
@@ -115,14 +112,21 @@ sync_repository() {
         return
     fi
 
-    if ! git -C "$repository" show-ref --verify --quiet refs/remotes/origin/master; then
-        printf '[FAILED]  %s: origin/master does not exist\n' "$repository"
+    default_ref=$(git -C "$repository" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || {
+        printf '[FAILED]  %s: origin default branch cannot be determined\n' "$repository"
         failed=$((failed + 1))
+        return
+    }
+    default_branch=${default_ref#origin/}
+
+    if [[ "$branch" != "$default_branch" ]]; then
+        printf '[SKIPPED] %s: current branch is %s (origin default is %s)\n' "$repository" "$branch" "$default_branch"
+        skipped=$((skipped + 1))
         return
     fi
 
-    if ! git -C "$repository" merge --quiet --ff-only origin/master >/dev/null 2>&1; then
-        printf '[FAILED]  %s: master cannot be fast-forwarded\n' "$repository"
+    if ! git -C "$repository" merge --quiet --ff-only "$default_ref" >/dev/null 2>&1; then
+        printf '[FAILED]  %s: %s cannot be fast-forwarded\n' "$repository" "$default_branch"
         failed=$((failed + 1))
         return
     fi

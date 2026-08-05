@@ -63,7 +63,7 @@ augroup END
 
 augroup remove_tail_space
     autocmd!
-    autocmd BufWritePre * :%s/\s\+$//e
+    autocmd BufWritePre * if &filetype !~# 'markdown\|diff' | %s/\s\+$//e | endif
 augroup END
 
 inoremap <expr> <Tab>   pumvisible() ? "\<C-n>" : "\<Tab>"
@@ -79,7 +79,7 @@ set encoding=utf-8
 set t_Co=256
 set autoindent
 set tabstop=2
-set shiftwidth=4
+set shiftwidth=2
 set expandtab
 set softtabstop=2
 set number

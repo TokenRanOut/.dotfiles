@@ -1,4 +1,6 @@
-eval "$(sheldon --config-dir ~/.sheldon --data-dir ~/.sheldon source)"
+if has_command sheldon; then
+    eval "$(sheldon --config-dir ~/.sheldon --data-dir ~/.sheldon source)"
+fi
 
 _fzf_complete_git() {
   local lbuf=$1 revision path_query

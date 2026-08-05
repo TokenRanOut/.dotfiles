@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -o pipefail
+
 # Define package lists
 readonly BASE_PACKAGE_LIST=(
     zsh
@@ -12,6 +14,7 @@ readonly BASE_PACKAGE_LIST=(
     vim
     tmux
     gpg
+    git-delta
     pipx
     fzf
     direnv
@@ -32,36 +35,36 @@ readonly EXTRA_INSTALLER_LIST=(
 init_package_manager() {
     case "$OSTYPE" in
         freebsd*)
-            MANAGER_COMMAND="sudo pkg"
-            MANAGER_INSTALL="install -y"
-            MANAGER_UPDATE="update"
+            MANAGER_COMMAND=(sudo pkg)
+            MANAGER_INSTALL=(install -y)
+            MANAGER_UPDATE=(update)
             MANAGER_PACKAGE_LIST=(
                 sudo
             )
             ;;
         linux-gnu*)
             if type -p apt-get >/dev/null; then
-                MANAGER_COMMAND="sudo apt-get"
-                MANAGER_INSTALL="install -y"
-                MANAGER_UPDATE="update"
+                MANAGER_COMMAND=(sudo apt-get)
+                MANAGER_INSTALL=(install -y)
+                MANAGER_UPDATE=(update)
                 MANAGER_PACKAGE_LIST=(
                     build-essential
                     libssl-dev
                     sudo
                 )
             elif type -p yum >/dev/null; then
-                MANAGER_COMMAND="sudo yum"
-                MANAGER_INSTALL="install -y"
-                MANAGER_UPDATE="makecache"
+                MANAGER_COMMAND=(sudo yum)
+                MANAGER_INSTALL=(install -y)
+                MANAGER_UPDATE=(makecache)
                 MANAGER_PACKAGE_LIST=(
                     gcc
                     openssl-devel
                     sudo
                 )
             elif type -p pacman >/dev/null; then
-                MANAGER_COMMAND="sudo pacman"
-                MANAGER_INSTALL="-S --noconfirm --needed"
-                MANAGER_UPDATE="-Sy"
+                MANAGER_COMMAND=(sudo pacman)
+                MANAGER_INSTALL=(-S --noconfirm --needed)
+                MANAGER_UPDATE=(-Sy)
                 MANAGER_PACKAGE_LIST=(
                     base-devel
                     sudo
@@ -73,9 +76,9 @@ init_package_manager() {
             ;;
         darwin*)
             if type -p brew >/dev/null; then
-                MANAGER_COMMAND="brew"
-                MANAGER_INSTALL="install"
-                MANAGER_UPDATE="update"
+                MANAGER_COMMAND=(brew)
+                MANAGER_INSTALL=(install)
+                MANAGER_UPDATE=(update)
                 MANAGER_PACKAGE_LIST=()
             else
                 echo "Unsupported package manager"
@@ -107,19 +110,18 @@ install_packages() {
     esac
     all_package_list+=("${MANAGER_PACKAGE_LIST[@]}")
 
-    $MANAGER_COMMAND $MANAGER_UPDATE
+    "${MANAGER_COMMAND[@]}" "${MANAGER_UPDATE[@]}" || return 1
     echo "All package list: ${all_package_list[*]}"
-    $MANAGER_COMMAND $MANAGER_INSTALL "${all_package_list[@]}"
+    "${MANAGER_COMMAND[@]}" "${MANAGER_INSTALL[@]}" "${all_package_list[@]}"
 }
 
 init_sheldon() {
-    if [[ ! -d ~/.sheldon ]]; then
-        mkdir ~/.sheldon
-    fi
+    mkdir -p "$HOME/.sheldon"
 }
 
 stow_dotfiles() {
-    cd ~/.dotfiles && ls -d1 */ | xargs stow -S
+    cd "$HOME/.dotfiles" || return 1
+    stow --ignore=".DS_Store" -S */ || return 1
     cd - >/dev/null
 }
 
@@ -133,10 +135,10 @@ exit_if_root() {
 # Run functions
 exit_if_root
 init_package_manager
-init_sheldon
+init_sheldon || exit 1
 PROFILE="$1"
-install_packages "$PROFILE"
+install_packages "$PROFILE" || exit 1
 for installer in "${EXTRA_INSTALLER_LIST[@]}"; do
-    bash "$(dirname "$0")/installer/$installer" "$PROFILE"
+    bash "$(dirname "$0")/installer/$installer" "$PROFILE" || exit 1
 done
-stow_dotfiles
+stow_dotfiles || exit 1

@@ -16,8 +16,8 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Create a temporary file
-temp_file=$(mktemp)
-trap "rm -f $temp_file" EXIT
+temp_file=$(mktemp /etc/hosts.XXXXXX)
+trap 'rm -f "$temp_file"' EXIT
 
 # Get the action and parameters
 while getopts "s:d:l" opt; do
@@ -27,19 +27,27 @@ while getopts "s:d:l" opt; do
       shift $((OPTIND-1))
       ip_address=$1
       shift
-      awk -v ip="$ip_address" -v host="$hostname" '
+      cp -p /etc/hosts "$temp_file" && awk -v ip="$ip_address" -v host="$hostname" '
           BEGIN {found=0}
-          NF == 2 && $1 !~ /^#/ && $2 == host {print ip, host; found=1; next}
+          $1 !~ /^#/ {
+              for (i = 2; i <= NF; i++) {
+                  if ($i == host) {print ip, host; found=1; next}
+              }
+          }
           {print}
           END {if (!found) print ip, host}
-      ' /etc/hosts > $temp_file && mv $temp_file /etc/hosts
+      ' /etc/hosts > "$temp_file" && mv "$temp_file" /etc/hosts
       ;;
     d)
       hostname=$OPTARG
-      awk -v host="$hostname" '
-          NF == 2 && $1 !~ /^#/ && $2 == host {next}
+      cp -p /etc/hosts "$temp_file" && awk -v host="$hostname" '
+          $1 !~ /^#/ {
+              for (i = 2; i <= NF; i++) {
+                  if ($i == host) {next}
+              }
+          }
           {print}
-      ' /etc/hosts > $temp_file && mv $temp_file /etc/hosts
+      ' /etc/hosts > "$temp_file" && mv "$temp_file" /etc/hosts
       ;;
     l)
       cat /etc/hosts

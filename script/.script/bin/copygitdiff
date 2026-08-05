@@ -67,15 +67,15 @@ generate_prompt() {
 }
 
 # Generate git diff command
-git_diff_cmd="git diff --cached"
+git_diff_cmd=(git diff --cached)
 if [ ${#exclude_dirs[@]} -ne 0 ]; then
-  git_diff_cmd="$git_diff_cmd -- ."
+  git_diff_cmd+=(-- .)
   for dir in "${exclude_dirs[@]}"; do
-    git_diff_cmd="$git_diff_cmd ':!$dir'"
+    git_diff_cmd+=(":!$dir")
   done
 fi
 
-git_diff=$(eval $git_diff_cmd) || handle_error "Failed to execute git diff --cached"
+git_diff=$("${git_diff_cmd[@]}") || handle_error "Failed to execute git diff --cached"
 case "$lang" in
   "cn") git_diff_output=$(generate_prompt "$git_diff" Chinese) ;;
   "en") git_diff_output=$(generate_prompt "$git_diff" English) ;;

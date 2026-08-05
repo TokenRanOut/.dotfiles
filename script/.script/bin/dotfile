@@ -3,12 +3,14 @@
 readonly USAGE="Usage: ${0##*/} [update|stow]"
 
 update_dotfiles() {
-    cd ~/.dotfiles && git pull
+    cd "$HOME/.dotfiles" || return 1
+    git pull --ff-only || return 1
     cd - >/dev/null
 }
 
 stow_dotfiles() {
-    cd ~/.dotfiles && ls -d1 */ | xargs stow --ignore=".DS_Store" -S
+    cd "$HOME/.dotfiles" || return 1
+    stow --ignore=".DS_Store" -S */ || return 1
     cd - >/dev/null
 }
 
