@@ -48,10 +48,6 @@ github = 'zsh-users/zsh-autosuggestions'
 github = 'zdharma-continuum/fast-syntax-highlighting'
 use = ['*.plugin.zsh']
 
-[plugins.zsh-autocomplete]
-github = 'marlonrichert/zsh-autocomplete'
-use = ['*.plugin.zsh']
-
 [plugins.ohmyzsh]
 github = 'ohmyzsh/ohmyzsh'
 use = ['oh-my-zsh.sh']
