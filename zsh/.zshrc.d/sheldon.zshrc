@@ -2,6 +2,10 @@ if has_command sheldon; then
     eval "$(sheldon --config-dir ~/.sheldon --data-dir ~/.sheldon source)"
 fi
 
+if (( $+widgets[fzf-tab-complete] )) && [[ $(bindkey '^I') == *fzf-completion* ]]; then
+    bindkey '^I' fzf-tab-complete
+fi
+
 _fzf_complete_git() {
   local lbuf=$1 revision path_query
   local -a command_words
