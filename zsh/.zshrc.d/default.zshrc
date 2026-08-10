@@ -1,4 +1,5 @@
 export TERM=xterm-256color
+export EDITOR=vim
 add_path "$HOME/.script/bin"
 add_path "$HOME/.local/bin"
 add_path "$HOME/bin"

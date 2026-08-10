@@ -18,6 +18,7 @@ readonly BASE_PACKAGE_LIST=(
     pipx
     fzf
     direnv
+    ripgrep
 )
 
 readonly DEVELOP_PACKAGE_LIST=()
