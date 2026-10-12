@@ -1,188 +1,61 @@
 ---
 name: trace-spring-api-chain
 description: >
-  Use this skill when you need to trace the full call chain of any entry-point
-  method in a Spring backend project — from HTTP/RPC/MQ/Job entry, through
-  service layers, down to database access and external calls. Use it when the
-  user asks to "analyze call chains", "trace endpoint flows", "understand the
-  business flow", or wants to see what happens end-to-end when a particular API
-  is invoked. Do NOT use for: non-Spring projects, isolated single-class
-  analysis, code review that doesn't involve tracing a complete chain, or code
-  generation tasks. 适用：追踪 Spring 后端任意入口方法的完整调用链路、梳理业务
-  链路、分析接口执行流程。不适用：非 Spring 项目、单独分析某个类、不追踪链路的
-  代码审查或代码生成。
+  从 Spring 后端 HTTP、RPC、MQ 或 Job 入口追踪跨层调用链、业务流程、数据访问及外部调用时使用。
+  适用于端到端流程分析；不用于非 Spring 项目、孤立单类分析、无需追踪链路的代码审查或代码生成。
 tags: spring,tracing,call-chain,backend
 ---
 
 # trace-spring-api-chain
 
-> **前置依赖**: ！！开始前必须先用 `skill` 工具加载 **code-explore** skill。本 skill 遵循 code-explore 的文件读取规则、代码引用格式和分析原则。
+依赖 `code-explore` 的探索范围、委托契约及引用规范。上下文已有该技能时直接复用；尚未加载时再加载。本技能仅补充 Spring 链路分析维度。
 
-## 适用场景
+## 执行流程
 
-- 用户指定一个入口方法（HTTP/RPC/MQ/定时任务等），要求分析完整的后端调用链路
-- 用户想了解某个业务操作从入口到落库的完整执行流程
+1. **确定目标与范围**：确认入口和用户希望追踪的业务终点。通过构建清单、模块和包结构识别分层，不假定固定架构。
+2. **定位入口**：按入口标识搜索方法，提取协议、路径或队列、入参与返回值。入口不明确或需要完整检索模式时读取 [spring-entry-patterns.md](references/spring-entry-patterns.md)；仍有多个候选则列出并确认。
+3. **逐层取证**：从调用点及注入类型定位实际实现，核验方法调用、参数传递、条件分支、异常与返回路径，继续到数据访问或远程边界。少量文件直接读取；独立且复杂的分支可委托，不按类或行数强制拆分。
+4. **处理边界**：区分同步调用、异步提交、事件发布及远程请求。按下述规则决定停止或继续，不能将异步处理画成同一同步调用栈。
+5. **输出并自检**：按证据覆盖核验链路，说明未解析的实现、配置与关联，不以代理数量代替分析完整性。
 
-## 核心原则
+## Spring 证据维度
 
-1. **逐层跳转** — 从入口方法注入的字段找到下一层实现类，逐层追踪，不跳跃
-2. **输出适配** — 参考输出模板，按链路实际内容增减，不强行套固定模板
-3. **并行分析** — 同层级的多个文件同时 spawn subagent，不等串行
-4. **中断标注** — 遇到异步/线程切换/MQ 发布时标注中断点，不跨边界追踪
+仅提取链路实际涉及的项目；委托时可将相关行加入子任务，不再复制通用契约。
 
-## 工作流程
+| 维度 | 需要确认的证据 |
+|---|---|
+| 注入与 AOP | 接口实现、`@Qualifier` / `@Primary`、条件 Bean、profile、代理拦截与自调用 |
+| 加锁 | 本地或分布式锁位置、key、超时及释放路径 |
+| 事务 | `@Transactional` 或编程式事务边界、传播、只读、提交/回滚及异常处理 |
+| 缓存 | 读写/失效位置、cache name、key、TTL（以配置和实现为准） |
+| 数据访问 | Mapper/Repository 对应 SQL、表、过滤条件及操作类型；按目标补查已配置的 MyBatis 拦截器影响 |
+| MQ | 发送/消费位置、topic/queue、交换机、路由键、消息体与关联字段 |
+| 事件与异步 | 事件类型、监听器、`@Async`、线程池、调度配置和提交/执行的分界 |
+| RPC / HTTP | Feign、Dubbo、gRPC 等目标服务、接口签名、URL、fallback 及熔断配置 |
+| 重试与补偿 | 重试次数、backoff、异常匹配、`@Recover`、catch 补偿或 Saga 回滚 |
 
-进度：
-- [ ] Step 0: 加载 code-explore skill
-- [ ] Step 1: 探测项目架构 — pom.xml/gradle 模块划分 + 顶层包结构
-- [ ] Step 2: 定位入口 — 根据类型 grep 定位文件，spawn subagent 分析
-- [ ] Step 3: 逐层追踪 — 每层并行 spawn subagent，汇总拼接链路
-- [ ] Step 4: 输出自检 — 对照自检清单核验完整性和准确性
+## 异步与外部边界
 
-### Step 0: 加载 code-explore skill
+- 用户只关注请求同步路径时，在异步提交、MQ 发送或远程调用处停止，标明目标与尚未展开的后续处理。
+- 用户要求端到端业务流程时，可继续追踪范围内的消费者、监听器或异步方法；用消息类型、路由、订阅和关联字段证实衔接，单独呈现后续执行段。
+- 普通事件发布不自动等于异步；根据监听器、执行器和实际配置判断。无法确认时标为未知。
+- Feign 等代理接口不要求本地生成实现；核验声明及 fallback 即可。远端服务源码只有在任务明确纳入范围且调用目标能够对应时才继续。
+- 外部依赖仍遵守 `code-explore` 的公开签名与显式例外边界；找不到消费者、远端仓库或配置时报告证据缺口，不推测补全。
 
-通过 `skill` 工具加载 code-explore skill，获取 subagent 摘要模板、分工规则、禁止行为、代码引用格式。
+## 易错点
 
-### Step 1: 探测项目架构
+- 注入接口可能对应多个实现；结合限定符、条件和激活配置定位，环境未知时保留候选分支。
+- 不把代理类当业务实现；同类自调用通常不经过 Spring 代理，不能仅凭 `@Transactional` 或 `@Async` 注解断言事务或异步生效。
+- 用已访问的方法和调用边去重，避免循环；同一方法的不同关键分支仍需保留。
+- 不跳过中间层；映射到 SQL 或远端契约的证据不足时明确停止位置。
 
-- 看 pom.xml / build.gradle 了解项目模块划分
-- 用 `glob` 看顶层包结构，识别分层命名习惯（如 biz/process、service、repository、dao、manager 等）
-- 确定本项目的典型调用路径：入口方法 → ? → ? → ? → DB / 外部调用
+## 结果要求与自检
 
-### Step 2: 定位入口
+默认输出：简要业务背景、入口标识、带文件行号的核心链路，以及边界和未决项。树形图按真实调用深度缩进，异步后续另段表示。按用户目标补充校验、数据操作、外部调用或关键字段表，避免正文与速查表重复罗列全部引用。
 
-根据用户描述推断入口类型，若无法确定则向用户确认。入口类型及 grep 模式详见 **`references/spring-entry-patterns.md`**（当入口类型不确定或需要详尽模式时读取）。
-
-简要速查：
-
-| 入口类型 | 典型 grep 关键词 | Subagent 需提取的元数据 |
-|----------|-------------------|------------------------|
-| HTTP | @PostMapping, @GetMapping, @RestController | 方法、路径、请求/响应体 |
-| Dubbo | @DubboService, dubbo:service | 接口名、方法签名、版本号 |
-| Feign | @FeignClient | 接口名、URL/服务名、fallback |
-| MQ Consumer | @RabbitListener, @KafkaListener, @RocketMQMessageListener | Queue/Topic、交换机、路由键 |
-| 定时任务 | @Scheduled, @XxlJob, @ElasticJob | cron、任务名 |
-| gRPC | @GrpcService, extends.*ImplBase | proto service 名、方法 |
-
-- 主 agent 根据入口类型选择对应的 grep 模式，定位入口文件
-- **！！必须 spawn subagent 分析入口文件**，提取元数据和下层调用列表（类/接口名与行号）
-
-### Step 3: 逐层追踪
-
-- **！！对每层发现的每个下层实现类，必须立即并行 spawn subagent 读取分析**
-- 主 agent 根据上一层 subagent 摘要中的「调用关系」信息，用 `grep` 定位下一层实现类
-- 同层级的多个文件同时 spawn subagent，按摘要模板 + Spring 特有分析维度返回
-- 从 subagent 摘要中提取关键步骤，按代码执行顺序整理
-- 继续追踪到数据访问层或外部 RPC 调用层，直到链路终点（Mapper/Repository/外部 RPC 接口）
-- 每层追踪过程中，主 agent 汇总 subagent 返回的摘要，拼接链路
-
-#### Subagent prompt 追加项（Spring 特有分析维度）
-
-在 code-explore 通用摘要模板基础上，spawn subagent 时追加以下提取指令：
-
-| 模式 | 追加到 subagent prompt |
-|------|----------------------|
-| 加锁 | 标注 RedisLockManager/@Lock/@Synchronized 的锁类型、key、超时 |
-| 事务 | 标注 @Transactional 的传播级别、只读标志，定位 begin/commit/rollback |
-| 缓存 | 标注 @Cacheable/@CacheEvict/@CachePut/redisTemplate 的 cache name、key、TTL |
-| MQ 发送 | 标注 RabbitTemplate/KafkaTemplate/RocketMQTemplate 的 topic/queue、消息体 |
-| 事件发布 | 标注 ApplicationEventPublisher.publishEvent() 的事件类型 |
-| Feign 调用 | 标注 @FeignClient 方法调用的 URL、fallback、熔断配置 |
-| 异步 | 标注 @Async/@EventListener(asynchronous) — **不继续追踪**，标记中断点 |
-| 重试 | 标注 @Retryable 的 maxAttempts、backoff、include/exclude |
-| 补偿 | 标注 catch 块中的补偿逻辑、Saga 回滚、@Recover 方法 |
-
-#### 主 agent 输出维度汇总
-
-主 agent 按以下维度整理汇总结果：
-
-| 输出维度 | 说明 |
-|---------|------|
-| 加锁 | 分布式锁 / 本地锁位置与参数 |
-| 事务边界 | @Transactional 方法及传播行为 |
-| 缓存操作 | Cache 读写位置与 key 策略 |
-| 消息发送 (MQ) | Topic/Queue 及发送位置 |
-| 事件发布 | 事件类型与发布位置 |
-| Feign 远程调用 | 目标服务、URL、fallback |
-| 异步调用 | 标注中断点，不深入追踪 |
-| 重试 | 重试策略与配置 |
-| 兜底/补偿 | 失败回退逻辑 |
-
-### Step 4: 输出自检
-
-对照以下清单逐项核验：
-
-- [ ] 每层调用都有对应的 subagent 分析结果
-- [ ] 所有代码引用格式为 `ClassName.methodName() @ FileName:行号` 或 `行 → 行`
-- [ ] 树形缩进层级与实际调用深度一致
-- [ ] MQ 发送 / 异步 / 事件发布 标注了中断点
-- [ ] 外部 RPC 调用标注了框架类型（Dubbo/Feign/gRPC/HTTP）
-- [ ] 入口表、速查表、数据操作表等附属表格内容与正文引用一致
-
-## 输出要求
-
-参考以下模板，按链路实际内容增减：
-
-### 1. 业务背景
-
-2-4 句话，说清这个接口在业务中的定位、触发场景、上下游参与者。如果接口在不同端都有入口（如 WX/APP），一并说明。
-
-### 2. 入口
-
-- 表格列出每条入口的：入口类型、标识(路径/队列/topic/cron)、入口类名、`类名.方法名() @ 文件:行号`
-- 入口专属元数据（HTTP 的请求/响应体、MQ 的队列/topic、定时任务的 cron 等）
-- 若有相关接口（如同模块的预校验、取消等），列出
-
-### 3. 核心链路（逐方法验证）
-
-- 使用缩进树形文本图，层级对应实际调用链深度
-- 每行标注 `类名.方法名() @ 文件名:行号`，同文件跳转用 `行 → 行`
-- 包含关键参数和返回值说明
-- 外部 RPC 调用标注为 `→ 接口名.方法()`，标注实际 RPC 框架（Dubbo/Feign/gRPC）
-- MQ 发送标注为 `→ MQ topic/queue`
-- 事件发布标注为 `⇢ Event xxxEvent`
-- 异步调用标注为 `⟳ @Async`（中断点）
-
-### 4. 校验/检查清单（若链路中有集中校验逻辑）
-
-- 表格列出校验方法名称和校验内容
-- 区分阻断级和非阻断级
-
-### 5. 数据操作汇总（若有数据库写入）
-
-- 表格列出：序号、操作类型、表名、说明
-- 注明事务边界（标注事务方法名和行号）
-
-### 6. 外部调用汇总（若有 RPC / HTTP / MQ 调用）
-
-- 表格列出：调用目标、调用方式、`类名.方法名() @ 文件:行号`
-
-### 7. 关键字段传递（若链路上有核心业务字段需要跨层传递）
-
-- 表格列出：阶段、`类名.方法名()`、行号、行为
-
-### 8. 代码位置速查表
-
-- 汇总全文中所有标注过的代码引用
-- 表格：内容、类名.方法名()、文件、行号
-
-## Gotchas
-
-以下是追踪 Spring 调用链时最容易踩的坑：
-
-- **AOP 代理断链** — Spring AOP / CGLIB 代理的类，调用栈中可能只看到代理类而非实际实现。用注入字段的类型而非运行时期类型来定位下一层。
-- **@Async 跨越线程** — `@Async` 注解的方法运行在新线程中，调用栈断裂。标注中断点后不继续追踪线程内的逻辑，除非用户明确要求。
-- **@Transactional 自调用** — 同一类中方法 A 调用带 `@Transactional` 的方法 B，事务不生效。标注此情况但不作为事务边界。
-- **Feign 接口无本地实现** — `@FeignClient` 接口的实现不在本地代码库。标注为终端节点，列出 URL 和方法签名，不搜索实现类。
-- **MyBatis 拦截器** — SQL 可能被 MyBatis Plugin / Interceptor 增强（分表、加密、审计）。若项目中配置了拦截器，注明可能的副作用。
-- **循环依赖陷阱** — A 注入 B，B 注入 A（即使是间接的）。追踪时记录已访问过的类，避免无限循环。
-- **条件注入** — `@ConditionalOnProperty` / `@ConditionalOnBean` 等条件注入可能导致不同环境走不同实现。以当前激活的 profile 为准。
-
-## ！！禁止行为
-
-- ❌ 主 agent 直接用 `read` 读取代码文件（超过 30 行）—— 必须 spawn subagent
-- ❌ 跳过中间层直接从入口跳到 Mapper/Repository
-- ❌ 串行调用互无依赖的 subagent 任务
-- ❌ 跨 @Async / MQ / 线程池边界继续追踪（标注中断点即可）
-- ❌ 对 Feign 接口 / Dubbo 引用在本地搜索实现类
-- ❌ 输出时省略代码引用格式中的文件:行号
+- [ ] 每条关键调用边都有调用点和目标证据；条件分支、异常与返回路径覆盖了用户目标。
+- [ ] 入口元数据、实现选择及关键参数传递与源码一致；推断明确标注。
+- [ ] 事务、锁、缓存、重试等相关行为有证据，没有仅凭注解或命名下结论。
+- [ ] 异步、事件、MQ 和 RPC 边界已标注，继续或停止符合用户目标与探索范围。
+- [ ] 代码引用包含项目/模块、符号、文件路径和行号；图表与正文一致。
+- [ ] 已说明链路终点、未决配置及未覆盖部分；分析来源可以是直接读取或经核验的委托摘要。

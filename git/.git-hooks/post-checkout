@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+link_agents_file() {
+  local source_file="$main_worktree/AGENTS.md"
+  local target_file="$worktree_root/AGENTS.md"
+
+  # Do not replace repository-owned or worktree-specific instructions.
+  if git ls-files --error-unmatch -- AGENTS.md >/dev/null 2>&1 \
+    || [[ -e "$target_file" || -L "$target_file" ]] \
+    || [[ ! -f "$source_file" ]]; then
+    return
+  fi
+
+  ln -s "$source_file" "$target_file"
+}
+
+find_codegraph() {
+  local candidate
+
+  candidate=$(command -v codegraph 2>/dev/null || true)
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+
+  for candidate in \
+    "${HOME:-}/.local/bin/codegraph" \
+    /opt/homebrew/bin/codegraph \
+    /usr/local/bin/codegraph \
+    "${HOME:-}"/.nvm/versions/node/*/bin/codegraph; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+}
+
+initialize_codegraph() {
+  local codegraph_bin git_dir lock_dir log_file
+
+  codegraph_bin=$(find_codegraph || true)
+  [[ -n "$codegraph_bin" ]] || return
+  [[ -f "$worktree_root/.codegraph/codegraph.db" ]] && return
+
+  git_dir=$(git rev-parse --absolute-git-dir)
+  lock_dir="$git_dir/codegraph-init.lock"
+  log_file="$git_dir/codegraph-init.log"
+
+  # Prevent repeated checkouts from launching concurrent full indexes.
+  mkdir "$lock_dir" 2>/dev/null || return
+
+  nohup /bin/bash -c '
+    trap '\''rmdir "$3"'\'' EXIT
+    "$1" init "$2"
+  ' _ "$codegraph_bin" "$worktree_root" "$lock_dir" \
+    </dev/null >"$log_file" 2>&1 &
+}
+
+worktree_root=$(git rev-parse --show-toplevel)
+main_worktree=$(git worktree list --porcelain | while IFS= read -r line; do
+  case "$line" in
+    "worktree "*)
+      printf '%s\n' "${line#worktree }"
+      break
+      ;;
+  esac
+done)
+
+if ! /bin/bash "$(dirname "${BASH_SOURCE[0]}")/sdkman-config-init"; then
+  printf '%s\n' 'SDKMAN configuration initialization failed; existing checkout hooks will continue.' >&2
+fi
+
+if ! /bin/bash "$(dirname "${BASH_SOURCE[0]}")/maven-config-init"; then
+  printf '%s\n' 'Maven configuration initialization failed; existing checkout hooks will continue.' >&2
+fi
+
+# AGENTS links and CodeGraph initialization apply only to linked worktrees.
+if [[ "$worktree_root" == "$main_worktree" ]]; then
+  exit 0
+fi
+
+link_agents_file
+initialize_codegraph

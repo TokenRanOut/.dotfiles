@@ -13,6 +13,7 @@ Plug 'vim-airline/vim-airline'
 Plug 'hrsh7th/vim-vsnip'
 Plug 'hrsh7th/vim-vsnip-integ'
 Plug 'rafamadriz/friendly-snippets'
+Plug 'junegunn/fzf.vim'
 
 call plug#end()
 

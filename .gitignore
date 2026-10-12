@@ -1,3 +1,4 @@
 .vscode
 **/.DS_Store
 **/skills/company
+/config/.playwright/cli.config.json

@@ -1,6 +1,6 @@
 ---
 name: quick-render-uml
-description: 适用：渲染 PlantUML 为图像并预览（时序图/类图/流程图等），从 .puml 文件、标准输入、剪贴板、自然语言描述生成 SVG/PNG。不适用：只讨论设计概念而不出图、非 PlantUML 格式图表。Use when: rendering PlantUML diagrams, previewing .puml files, generating SVG/PNG. Do NOT use: conceptual discussion only, non-PlantUML diagrams.
+description: 将 PlantUML 文件、代码或用户描述渲染为 SVG/PNG 并预览时使用。不用于仅讨论设计概念或非 PlantUML 格式的图表。
 tags: uml,plantuml,svg,png,render,preview
 ---
 

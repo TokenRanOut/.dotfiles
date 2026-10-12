@@ -19,6 +19,7 @@ readonly BASE_PACKAGE_LIST=(
     fzf
     direnv
     ripgrep
+    tree-sitter-cli
 )
 
 readonly DEVELOP_PACKAGE_LIST=()
@@ -32,6 +33,7 @@ readonly EXTRA_INSTALLER_LIST=(
     pipx-install.sh
     vim-install.sh
     cookie-sync-install.sh
+    playwright-config-install.sh
 )
 
 # Define package manager settings

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# @raycast.schemaVersion 1
+# @raycast.title JSON One line
+# @raycast.mode silent
+# @raycast.packageName JSON Tools
+
+pbpaste | jq -c . | pbcopy

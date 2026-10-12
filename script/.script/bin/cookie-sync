@@ -46,7 +46,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 import websockets
 
-SAMESITE_MAP = {-1: "None", 0: "None", 1: "Lax", 2: "Strict"}
+SAMESITE_MAP = {-1: "Lax", 0: "None", 1: "Lax", 2: "Strict"}
 
 CHROME_EPOCH_OFFSET = 11644473600
 CDP_TIMEOUT = 10

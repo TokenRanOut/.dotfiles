@@ -1,8 +1,8 @@
 [
   {
     "query": "帮我在知识库里搜索一下关于部署流程的笔记",
-    "should_trigger": true,
-    "note": "显式提'知识库'，对应push关键词"
+    "should_trigger": false,
+    "note": "仅提知识库，未确认是 Obsidian vault"
   },
   {
     "query": "我有个obsidian vault，帮我找一下关于React hooks的笔记内容",
@@ -10,9 +10,9 @@
     "note": "直接提obsidian vault"
   },
   {
-    "query": "搜索我的第二大脑里有没有Golang并发相关的文章",
+    "query": "我的第二大脑是 Obsidian vault，搜索里面有没有Golang并发相关的文章",
     "should_trigger": true,
-    "note": "用'第二大脑'替代关键词，测试push覆盖"
+    "note": "上下文明确第二大脑指 Obsidian vault"
   },
   {
     "query": "在obsidian里创建一篇新笔记，标题是Docker部署踩坑记录",
@@ -21,33 +21,33 @@
   },
   {
     "query": "帮我看看今天日记里写了什么",
-    "should_trigger": true,
-    "note": "每日日记读取，隐含obsidian"
+    "should_trigger": false,
+    "note": "仅提日记，不能推断为 Obsidian"
   },
   {
     "query": "查一下我的笔记里哪些文档引用了'部署指南'这篇",
-    "should_trigger": true,
-    "note": "backlinks查询，没提obsidian但应触发"
+    "should_trigger": false,
+    "note": "引用关系不自动代表 Obsidian vault"
   },
   {
     "query": "把这篇关于Nginx配置的笔记打上标签 server,devops",
-    "should_trigger": true,
-    "note": "property set任务，隐含obsidian"
+    "should_trigger": false,
+    "note": "普通笔记标签操作，尚未确认 vault"
   },
   {
-    "query": "我的vault里有哪些没有incoming链接的孤立笔记？",
+    "query": "我的 Obsidian vault 里有哪些没有incoming链接的孤立笔记？",
     "should_trigger": true,
-    "note": "用vault术语但没提obsidian，orphans查询"
+    "note": "明确 Obsidian vault 的孤立笔记查询"
   },
   {
     "query": "帮我在日记里追加一条今天的TODO",
-    "should_trigger": true,
-    "note": "日记追加操作"
+    "should_trigger": false,
+    "note": "仅提日记，未明确目标应用"
   },
   {
     "query": "在我的笔记库里搜索一下Kubernetes，看看有几篇相关的",
-    "should_trigger": true,
-    "note": "'笔记库'替代关键词"
+    "should_trigger": false,
+    "note": "笔记库泛词不触发"
   },
   {
     "query": "给obsidian里的那篇Python异步编程笔记添加一个tags属性",
@@ -55,9 +55,9 @@
     "note": "明确obsidian，property操作"
   },
   {
-    "query": "看看我笔记库里有几个待办任务还没完成",
+    "query": "前面指定的笔记库是 Obsidian vault，看看里面有几个待办任务还没完成",
     "should_trigger": true,
-    "note": "tasks查询"
+    "note": "上下文已确认 vault 的 tasks 查询"
   },
   {
     "query": "帮我列出obsidian中所有带frontend标签的笔记文件",
@@ -65,14 +65,14 @@
     "note": "tags查询"
   },
   {
-    "query": "帮我找到vault里链接关系最密集的笔记，我想了解知识结构",
+    "query": "帮我找到 Obsidian vault 里链接关系最密集的笔记，我想了解知识结构",
     "should_trigger": true,
     "note": "链接关系分析"
   },
   {
     "query": "我忘记某篇笔记放哪了，只记得里面提到了Jenkins pipeline这个词，帮我找找",
-    "should_trigger": true,
-    "note": "典型搜索场景，没提obsidian但意图明确"
+    "should_trigger": false,
+    "note": "搜索意图明确，但不能推断笔记位于 Obsidian"
   },
   {
     "query": "帮我在Notion里搜索一下项目计划相关的文档",
@@ -92,7 +92,7 @@
   {
     "query": "帮我把~/Documents/notes/下的markdown文件批量重命名",
     "should_trigger": false,
-    "note": "直接文件系统操作，非通过CLI"
+    "note": "普通 Markdown 路径，未确认属于 vault；是否使用 CLI 不是触发依据"
   },
   {
     "query": "打开我的Bear应用，找一下本周的笔记",

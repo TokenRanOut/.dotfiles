@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+git_at() (
+  unset $(git rev-parse --local-env-vars)
+  git -C "$@"
+)
+
+link_sdkmanrc() {
+  local root="$1" source="$2"
+  local target="$root/.sdkmanrc"
+
+  if [[ -e "$target" || -L "$target" ]] \
+    || git_at "$root" ls-files --error-unmatch -- .sdkmanrc >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -f "$source" ]] || return 0
+  ln -s "$source" "$target"
+}
+
+worktree_root=$(git rev-parse --show-toplevel)
+main_worktree=''
+while IFS= read -r line; do
+  case "$line" in
+    "worktree "*) main_worktree="${line#worktree }"; break ;;
+  esac
+done < <(git worktree list --porcelain)
+[[ -n "$main_worktree" ]] || exit 0
+
+link_sdkmanrc "$main_worktree" "$(dirname "$main_worktree")/.sdkmanrc"
+if [[ "$worktree_root" != "$main_worktree" ]]; then
+  link_sdkmanrc "$worktree_root" "$main_worktree/.sdkmanrc"
+fi

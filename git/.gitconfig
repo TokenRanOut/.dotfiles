@@ -8,6 +8,8 @@
 [delta]
 	line-numbers = true
 	navigate = true
+[http "https://github.com"]
+	proxy = http://127.0.0.1:7890
 [includeIf "gitdir:~/.dotfiles/.git"]
 	path = .gitconfig-github
 [includeIf "gitdir:~/github/**"]

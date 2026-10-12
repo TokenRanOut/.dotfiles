@@ -1,6 +1,6 @@
 # Spring 入口模式速查
 
-> 当 SKILL.md 中的入口速查表不足以精确定位时，加载本文件获取完整的 grep 模式和元数据清单。
+> 当入口不明确或需要详细检索模式时读取。以下元数据由当前分析者提取，也可用于委托任务；不要求逐类创建子代理。
 
 ## 入口类型详情
 
@@ -15,7 +15,7 @@
 @PostMapping\s*\(|@GetMapping\s*\(|@RequestMapping\s*\(
 ```
 
-**Subagent 需提取**:
+**需提取**:
 - 类注解 (@RestController, @RequestMapping 基础路径)
 - 方法注解对应的方法名、HTTP 路径、HTTP 方法
 - 入参注解 (@RequestBody, @RequestParam, @PathVariable, @RequestHeader) 及类型
@@ -33,7 +33,7 @@
 @DubboService|implements\s+\w+Facade
 ```
 
-**Subagent 需提取**:
+**需提取**:
 - 服务接口全限定名、版本号 (version)、组 (group)
 - 方法签名（参数类型 + 返回值类型）
 - interfaceClass 指定的接口
@@ -51,14 +51,14 @@
 @FeignClient\s*\(
 ```
 
-**Subagent 需提取**:
+**需提取**:
 - name/value（服务名）、url、path
 - fallback/fallbackFactory 实现类名
 - configuration 类名
 - 接口中每个方法的 @RequestMapping/@GetMapping/@PostMapping 路径和签名
 - 熔断降级配置 (Hystrix/Sentinel)
 
-**！！注意**: Feign 接口无本地实现，不搜索实现类。标注为终端节点。
+**注意**：Feign 是远程调用契约，不要求搜索本地生成实现；可核验 fallback。是否继续追踪远端服务按用户目标及明确纳入的仓库范围决定，并单独标记远程边界。
 
 ### MQ Consumer
 
@@ -72,7 +72,7 @@
 - RocketMQ: `topic\s*=|consumerGroup\s*=|tag\s*=`
 - Pulsar: `subscriptionName\s*=|topic\s*=`
 
-**Subagent 需提取**:
+**需提取**:
 - Queue/Topic 名称、交换机 (exchange)、路由键 (routingKey)
 - 消费者组 (consumerGroup)、并发数 (concurrency/concurrencyLimit)
 - 消息体类型（方法参数类型）
@@ -91,7 +91,7 @@
 - ElasticJob: `@ElasticSimpleJob|@ElasticDataflowJob`
 - PowerJob: `@PowerJobHandler`
 
-**Subagent 需提取**:
+**需提取**:
 - cron 表达式 / fixedRate / fixedDelay
 - 任务名 (如 XXL-JOB 的 jobHandler name)
 - 分片策略
@@ -109,7 +109,7 @@
 @GrpcService
 ```
 
-**Subagent 需提取**:
+**需提取**:
 - proto service 名、包名
 - 方法名、请求/响应消息类型
 - Stream 类型 (UNARY / SERVER_STREAMING / CLIENT_STREAMING / BIDI_STREAMING)
