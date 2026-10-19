@@ -11,6 +11,7 @@
   # 导出（输出 JSON 到 stdout 或 --output 文件）
   cookie-sync export [--domains feishu.cn,*.larksuite.com] [--profile Default] [--playwright] [--output /path/to/file.json]
   cookie-sync export --domains feishu.cn --playwright --output storage-state.json
+  cookie-sync export --domains kmrjdev.cn --playwright --local-storage-origin https://op.kmrjdev.cn --output storage-state.json
 
   # 注入（读文件或 stdin）
   cookie-sync export --domains feishu.cn --output - | cookie-sync inject
@@ -22,7 +23,7 @@
   # 禁用会话发现（回退到正常注入模式）
   cookie-sync sync --domains feishu.cn --no-reconnect
 
-需安装: pip3 install cryptography websockets
+需安装: cryptography websockets；localStorage 导出另需 ccl_chromium_reader（见安装脚本）。
 """
 import argparse
 import asyncio
@@ -202,15 +203,93 @@ def do_export(args) -> list:
         os.unlink(tmp_path)
 
 
+def parse_storage_origin(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in ("", "/")):
+        raise argparse.ArgumentTypeError("localStorage 必须指定完整 HTTP/HTTPS 源地址，不含路径、查询或凭证")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise argparse.ArgumentTypeError("localStorage 源地址端口无效") from None
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None and port != {"http": 80, "https": 443}[parsed.scheme]:
+        host = f"{host}:{port}"
+    return f"{parsed.scheme}://{host}"
+
+
+def storage_entries(records) -> list[dict]:
+    # 取证读取器会返回历史版本；必须先选最新记录，再排除删除标记。
+    latest = {}
+    for record in records:
+        previous = latest.get(record.script_key)
+        if previous is None or record.leveldb_seq_number > previous.leveldb_seq_number:
+            latest[record.script_key] = record
+    return [
+        {"name": key, "value": record.value}
+        for key, record in sorted(latest.items()) if record.is_live
+    ]
+
+
+def export_local_storage(profile: str, origins: list[str]) -> list[dict]:
+    if not origins:
+        return []
+    try:
+        from ccl_chromium_reader.ccl_chromium_localstorage import LocalStoreDb
+
+        source = Path.home() / "Library/Application Support/Google/Chrome" / profile / "Local Storage/leveldb"
+        states = []
+        # 只读解析，不打开原数据库的写入锁，也不输出解析器可能含凭证的诊断。
+        with open(os.devnull, "w") as diagnostics:
+            with contextlib.redirect_stdout(diagnostics), contextlib.redirect_stderr(diagnostics):
+                with LocalStoreDb(source) as database:
+                    for origin in dict.fromkeys(origins):
+                        records = database.iter_records_for_storage_key(
+                            origin, include_deletions=True, raise_on_no_result=False,
+                        )
+                        entries = storage_entries(records)
+                        states.append({"origin": origin, "localStorage": entries})
+    except Exception as error:
+        print(f"Error: localStorage 只读导出失败（{type(error).__name__}），未替换输出文件；请检查依赖和 Chrome profile", file=sys.stderr)
+        raise SystemExit(1) from None
+    for state in states:
+        print(f"localStorage 导出: {state['origin']}，{len(state['localStorage'])} 项", file=sys.stderr)
+    return states
+
+
+def write_private_json(path: str, content: str):
+    destination = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
+                                         prefix=f".{destination.name}.", delete=False) as output:
+            temporary = output.name
+            os.chmod(temporary, 0o600)
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def cmd_export(args):
+    origins = getattr(args, "local_storage_origin", [])
+    if origins and not args.playwright:
+        print("Error: --local-storage-origin 必须与 --playwright 一起使用", file=sys.stderr)
+        raise SystemExit(1)
     cookies = do_export(args)
-    data = {"cookies": cookies, "origins": []} if args.playwright else cookies
+    data = {"cookies": cookies, "origins": export_local_storage(args.profile, origins)} if args.playwright else cookies
     json_output = json.dumps(data, ensure_ascii=False)
     out = getattr(args, "output", "-")
     if out == "-":
         print(json_output)
     else:
-        Path(out).write_text(json_output, encoding="utf-8")
+        write_private_json(out, json_output)
     print(f"导出完成: {len(cookies)} 条 cookies", file=sys.stderr)
 
 
@@ -541,6 +620,8 @@ def build_parser():
     p_export.add_argument("--domains", help="域名白名单，逗号分隔（支持 *.example.com）")
     p_export.add_argument("--profile", default="Default", help="Chrome profile（默认 Default）")
     p_export.add_argument("--playwright", action="store_true", help="输出 Playwright storage state 格式")
+    p_export.add_argument("--local-storage-origin", action="append", type=parse_storage_origin, default=[],
+                          help="导出指定源地址的 localStorage（需 --playwright，可重复，如 https://op.kmrjdev.cn）")
     p_export.add_argument("--output", default="-", help="输出路径（- 为 stdout）")
     p_export.set_defaults(func=cmd_export)
 

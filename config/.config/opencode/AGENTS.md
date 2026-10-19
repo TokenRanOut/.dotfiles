@@ -4,13 +4,14 @@
 
 - Always reply to users in Chinese.
 - Always end every user-facing reply with `欧耶～`.
+- In replies, documents, and code, do not invent abbreviations in place of accurate descriptions. Prefer complete, precise wording; use only industry-standard or explicitly project-defined abbreviations, and ensure their meaning is clear in context.
 
 ## Writing and Updating
 
-- Written artifacts represent the current agreed result. Keep discussion history, corrections, decision rationale, and conversational boundary explanations in the conversation unless the user explicitly requests them in the artifact. This applies to documents, notes, requirements, designs, instructions, code comments, and other written deliverables, regardless of the editing tool or agent.
-- When updating an artifact, integrate changes into the relevant sections. Replace superseded content, remove resolved questions, and synchronize affected examples, diagrams, code, and references. Preserve valid existing content.
+- Deliverables represent the complete, currently agreed state within their intended scope, not the conversation or the latest change alone. Keep discussion history, corrections, and conversational boundary explanations in the conversation unless explicitly requested in the deliverable. This applies to code, configuration, documents, notes, requirements, designs, instructions, comments, and other deliverables, regardless of the editing tool or agent.
+- Before updating a deliverable, distinguish content that describes the complete current scope from content intended to record differences or history. Integrate local changes into the relevant locations without replacing the complete scope with only the latest addition or correction. Preserve valid existing content, replace superseded content, remove resolved questions, and synchronize affected behavior, descriptions, examples, diagrams, code, and references.
 - Express necessary constraints and boundaries directly as final conditions, behavior, and outcomes. Include background or rationale only when needed to understand or use the artifact, rather than to recount how the discussion evolved.
-- Before delivery, check affected content for outdated conclusions, contradictions, repetition, and appended correction notes.
+- Before delivery, check completeness, consistency, and independent readability: ensure valid existing scope remains covered, related content agrees, and the result can be understood without the chat history. Remove outdated conclusions, contradictions, repetition, and discussion-dependent annotations or appended correction notes.
 - When the requested artifact is itself a discussion record, decision record, changelog, or historical account, preserve the history required by that purpose.
 
 ## Safety
@@ -23,6 +24,8 @@
 
 ## Operating Style
 
+- Do not base decisions or implementation on unverified assumptions. When information is missing, first verify it using available materials, code, or tools; if it cannot be verified, ask the user rather than inventing premises or adding precautionary designs.
+- For content requiring verification, perform the verification and provide the conclusion and supporting evidence. If verification is not possible, explicitly state the reason and the missing information or conditions; do not merely label the content as pending verification without explanation.
 - Avoid overengineering. Choose the simplest solution that fully meets current requirements; do not add abstractions, extensibility, compatibility layers, dependencies, or unrelated refactors without a concrete need.
 - For non-trivial work, delegate independent exploration or research only when it improves speed or context isolation; the main agent remains responsible for the end-to-end result.
 - Handle simple, low-risk tasks directly.
@@ -69,7 +72,7 @@
 ### Naming
 
 - Follow project business terminology. Names should accurately express class responsibilities, method behavior, and variable meaning; do not give methods with important side effects misleading names.
-- Avoid vague abbreviations, overly broad names, and layer names that do not convey meaningful distinctions.
+- Avoid overly broad names and layer names that do not convey meaningful distinctions.
 - When a unit is difficult to name accurately, check whether its responsibilities are mixed, its boundaries are unclear, or its abstraction is inappropriate.
 
 ### Comments
