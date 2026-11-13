@@ -1,10 +1,24 @@
+local function project_root()
+  return vim.fs.root(0, ".git")
+    or vim.fs.root(0, { "pom.xml", "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts" })
+    or vim.fn.getcwd()
+end
+
 return {
   {
     "ibhagwan/fzf-lua",
+    event = "VeryLazy",
     opts = {},
+    config = function(_, opts)
+      local fzf = require("fzf-lua")
+      fzf.setup(opts)
+      fzf.register_ui_select()
+    end,
     keys = {
-      { "<leader>ff", function() require("fzf-lua").files() end, desc = "Find files" },
-      { "<leader>fg", function() require("fzf-lua").live_grep() end, desc = "Grep workspace" },
+      { "<leader>ff", function() require("fzf-lua").files({ cwd = project_root() }) end, desc = "Find files" },
+      { "<leader>fg", function() require("fzf-lua").live_grep({ cwd = project_root() }) end, desc = "Grep workspace" },
+      { "<leader>fb", function() require("fzf-lua").buffers() end, desc = "Find open buffers" },
+      { "<leader>fo", function() require("fzf-lua").oldfiles() end, desc = "Find recent files" },
       { "<leader>fs", function() require("fzf-lua").lsp_document_symbols() end, desc = "Document symbols" },
       { "<leader>fS", function() require("fzf-lua").lsp_workspace_symbols() end, desc = "Workspace symbols" },
       { "<leader>fr", function() require("fzf-lua").lsp_references() end, desc = "References" },

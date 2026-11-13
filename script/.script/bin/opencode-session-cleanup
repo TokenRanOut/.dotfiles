@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""清理本机 OpenCode V2 中工作目录已不存在的会话；默认仅预览。"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from urllib.parse import urlencode
+
+
+def api(method, path):
+    result = subprocess.run(
+        ["opencode", "api", method, path], capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def list_sessions():
+    sessions = []
+    cursor = None
+    seen = set()
+    while True:
+        query = {"limit": "100"}
+        if cursor:
+            query["cursor"] = cursor
+        page = api("get", "/api/session?" + urlencode(query))
+        sessions.extend(page["data"])
+        cursor = page.get("cursor", {}).get("next")
+        if not cursor:
+            return sessions
+        if cursor in seen:
+            raise RuntimeError("分页游标重复，停止清理。")
+        seen.add(cursor)
+
+
+def missing_directory(session):
+    directory = session["location"]["directory"]
+    if not os.path.isabs(directory):
+        raise RuntimeError(f"会话目录不是绝对路径：{directory}")
+    try:
+        os.stat(directory)
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        print(f"跳过无法检查的目录：{directory}（{error}）", file=sys.stderr)
+    return False
+
+
+def deletion_order(sessions, candidates):
+    by_id = {session["id"]: session for session in sessions}
+    candidate_ids = {session["id"] for session in candidates}
+    eligible = candidate_ids.copy()
+    depths = {}
+    for session in sessions:
+        current = session
+        ancestors = set()
+        while current.get("parentID") in by_id:
+            parent_id = current["parentID"]
+            if parent_id in ancestors or parent_id == session["id"]:
+                raise RuntimeError("检测到异常的会话父子关系，停止清理。")
+            ancestors.add(parent_id)
+            current = by_id[parent_id]
+        depths[session["id"]] = len(ancestors)
+        # 删除父会话会级联删除子会话，保留所有非候选会话的祖先。
+        if session["id"] not in candidate_ids:
+            eligible.difference_update(ancestors)
+    return sorted(
+        (session for session in candidates if session["id"] in eligible),
+        key=lambda session: depths[session["id"]], reverse=True,
+    )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="预览或清理本机 OpenCode V2 中工作目录已不存在的会话。",
+        epilog="仅适用于本机服务。请确认目录不是暂时未挂载的磁盘，并先备份需要保留的记录。",
+    )
+    parser.add_argument("--delete", action="store_true", help="展示清单，输入 DELETE 后删除")
+    args = parser.parse_args(argv)
+
+    sessions = list_sessions()
+    candidates = [session for session in sessions if missing_directory(session)]
+    ordered = deletion_order(sessions, candidates)
+    skipped = len(candidates) - len(ordered)
+    if skipped:
+        print(f"保留 {skipped} 个父会话：其子会话目录仍存在或无法检查。")
+    if not ordered:
+        print("没有可清理的会话。")
+        return 0
+
+    for session in ordered:
+        print(f'{session["id"]}\t{session["location"]["directory"]}\t{session.get("title", "")}')
+    print(f"\n共 {len(ordered)} 个可清理会话。")
+    if not args.delete:
+        print("当前仅预览；使用 --delete 并确认后删除。")
+        return 0
+
+    print("删除不可撤销，且会同时删除子会话。请先备份需要保留的记录。")
+    if input("输入 DELETE 确认删除，其他输入取消：").strip() != "DELETE":
+        print("已取消。")
+        return 0
+
+    # 确认期间目录或会话关系可能变化，变化后必须重新预览。
+    current = list_sessions()
+    current_candidates = [session for session in current if missing_directory(session)]
+    current_order = deletion_order(current, current_candidates)
+    snapshot = lambda items: {(s["id"], s.get("parentID"), s["location"]["directory"]) for s in items}
+    if snapshot(current) != snapshot(sessions) or snapshot(current_order) != snapshot(ordered):
+        raise RuntimeError("会话关系或目录状态已变化，请重新运行并确认清单。")
+    for session in current_order:
+        if not missing_directory(session):
+            raise RuntimeError("目录状态已变化，停止清理，请重新预览。")
+        api("delete", f'/api/session/{session["id"]}')
+        print(f'已删除：{session["id"]}')
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, ValueError, KeyError, EOFError) as error:
+        print(f"错误：{error}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n已取消。", file=sys.stderr)
+        sys.exit(130)

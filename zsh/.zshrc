@@ -37,3 +37,8 @@ zsh_rc_dir="$HOME/.zshrc.d"
 for rc_file in "$zsh_rc_dir"/*.zshrc(N); do
   source "$rc_file"
 done
+
+# QODER_DISPATCHER_PATH v1
+path=("$HOME/.qoder/entry" ${path:#"$HOME/.qoder/entry"})
+export PATH
+# END QODER_DISPATCHER_PATH v1

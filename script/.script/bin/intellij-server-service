@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""管理供 VS Code 和 Neovim 共用的本机 IntelliJ Language Server。"""
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+
+HOST = "127.0.0.1"
+
+
+def find_server(explicit=None):
+    if explicit:
+        binary = Path(explicit).expanduser().resolve()
+    else:
+        candidates = []
+        for extension in (Path.home() / ".vscode/extensions").glob("jetbrains.intellij-server-*"):
+            try:
+                metadata = json.loads((extension / "package.json").read_text())
+            except (OSError, ValueError):
+                continue
+            version = metadata.get("version", "")
+            if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+                continue
+            candidate = extension / "server/bin/intellij-server"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                candidates.append((tuple(map(int, version.split("."))), candidate))
+        if not candidates:
+            raise RuntimeError("未找到 VS Code 的 IntelliJ 服务程序；请使用 --server-path 指定。")
+        binary = max(candidates, key=lambda item: item[0])[1].resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError(f"服务程序不存在或不可执行：{binary}")
+    return binary
+
+
+def process_identity(pid):
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return None
+    result = subprocess.run(
+        ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "lstart=", "-o", "command="],
+        capture_output=True, text=True, check=False,
+    )
+    parts = result.stdout.strip().split(maxsplit=1)
+    if result.returncode or len(parts) != 2 or "Z" in parts[0]:
+        return None
+    return parts[1]
+
+
+def load_record(state):
+    try:
+        record = json.loads((state / "service.json").read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"无法读取服务记录，请先人工检查 {state / 'service.json'}：{error}") from error
+    if not isinstance(record, dict) or not {"pid", "identity", "port", "binary"} <= record.keys():
+        raise RuntimeError("服务记录格式错误，拒绝启动或停止进程。")
+    return record
+
+
+def managed_process(record):
+    return bool(record and record["identity"] and process_identity(record["pid"]) == record["identity"])
+
+
+def write_record(state, record):
+    temporary = state / "service.json.tmp"
+    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(state / "service.json")
+
+
+@contextlib.contextmanager
+def service_lock(state):
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (state / "service.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def listening(pid, port):
+    result = subprocess.run(
+        ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+        capture_output=True, text=True, check=False,
+    )
+    return f"n{HOST}:{port}" in result.stdout.splitlines()
+
+
+def check_port(port):
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((HOST, port))
+        except OSError as error:
+            raise RuntimeError(f"{HOST}:{port} 不可用；不会接管或停止其他服务：{error}") from error
+
+
+def eula_hash(binary):
+    path = binary.parent.parent / "EULA.txt"
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def client_server_directory(state, binary):
+    directory = binary.parent.parent
+    for executable in (binary, binary.parent / "lsp-router"):
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f"服务程序不存在或不可执行：{executable}")
+    link = state / "server"
+    if link.exists() and not link.is_symlink():
+        raise RuntimeError(f"客户端目录已被非符号链接占用，拒绝覆盖：{link}")
+    return directory
+
+
+def update_server_link(state, binary):
+    directory = client_server_directory(state, binary)
+    with tempfile.TemporaryDirectory(prefix=".server-link-", dir=state) as temporary:
+        link = Path(temporary) / "server"
+        link.symlink_to(directory, target_is_directory=True)
+        link.replace(state / "server")
+    print(f"客户端目录：{state / 'server'}")
+
+
+def start_service(args, state):
+    record = load_record(state)
+    if managed_process(record):
+        if record["port"] != args.port:
+            raise RuntimeError(f"服务已在端口 {record['port']} 运行，请先停止再更换端口。")
+        if not listening(record["pid"], record["port"]):
+            raise RuntimeError("受管理进程仍存在但未监听，拒绝重复启动；请检查 status 和 logs。")
+        update_server_link(state, Path(record["binary"]))
+        print(f"服务已运行：PID {record['pid']}，{HOST}:{record['port']}")
+        return
+
+    if not shutil.which("lsof"):
+        raise RuntimeError("需要 lsof 来核对监听进程。")
+    check_port(args.port)
+    binary = find_server(args.server_path)
+    client_server_directory(state, binary)
+    license_hash = eula_hash(binary)
+    system_path = state / "system"
+    command = [
+        str(binary), f"--socket={HOST}:{args.port}", "--multi-client",
+        "--system-path", str(system_path), "--eula", license_hash,
+    ]
+    log_path = state / "launcher.log"
+    with log_path.open("ab", buffering=0) as output:
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+            cwd=state, start_new_session=True,
+        )
+    record = {
+        "pid": process.pid, "identity": process_identity(process.pid),
+        "port": args.port, "binary": str(binary), "system_path": str(system_path),
+    }
+    try:
+        write_record(state, record)
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(f"服务启动退出，退出码 {process.returncode}；请查看 {log_path}")
+            if listening(process.pid, args.port):
+                record["identity"] = process_identity(process.pid)
+                if not record["identity"]:
+                    raise RuntimeError("无法确认服务进程身份。")
+                write_record(state, record)
+                update_server_link(state, binary)
+                print(f"服务已启动：PID {process.pid}，{HOST}:{args.port}")
+                print("端口已就绪；授权、项目导入及语言功能仍需在编辑器中验证。")
+                return
+            time.sleep(0.2)
+        raise RuntimeError(f"等待监听超时（{args.timeout:g} 秒）；请查看 {log_path}")
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                record["identity"] = process_identity(process.pid)
+                write_record(state, record)
+                print("进程未响应终止，已保留管理记录；未强制杀进程。", file=sys.stderr)
+                raise
+        (state / "service.json").unlink(missing_ok=True)
+        raise
+
+
+def stop_service(args, state):
+    record = load_record(state)
+    if not managed_process(record):
+        (state / "service.json").unlink(missing_ok=True)
+        print("没有运行中的受管理服务；未向其他进程发送信号。")
+        return
+    pid = record["pid"]
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + args.timeout
+    while managed_process(record):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"PID {pid} 未在 {args.timeout:g} 秒内退出；未强制杀进程。")
+        time.sleep(0.2)
+    (state / "service.json").unlink(missing_ok=True)
+    print(f"服务已停止：PID {pid}")
+
+
+def show_status(state):
+    record = load_record(state)
+    if not managed_process(record):
+        print("服务未运行，或管理记录对应的原进程已退出。")
+        return 1
+    ready = listening(record["pid"], record["port"])
+    print(f"PID：{record['pid']}\n地址：{HOST}:{record['port']}")
+    print(f"监听：{'已就绪' if ready else '未就绪'}\n程序：{record['binary']}")
+    print(f"状态目录：{state}\n启动日志：{state / 'launcher.log'}")
+    print(f"客户端目录：{state / 'server'}")
+    print("监听就绪不代表已授权或项目导入完成。")
+    return 0 if ready else 1
+
+
+def show_logs(state, follow):
+    paths = [state / "launcher.log"]
+    system_path = state / "system"
+    if system_path.is_dir():
+        paths.extend(sorted(system_path.rglob("*.log")))
+    paths = [str(path) for path in paths if path.is_file()]
+    if not paths:
+        print(f"尚无日志：{state}")
+        return 0
+    command = ["tail", "-n", "80"]
+    if follow:
+        command.append("-f")
+    return subprocess.call(command + paths)
+
+
+def main(argv=None):
+    default_state = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="启动即表示接受本次所用服务版本的 EULA（包括升级后的协议），可用 eula 查看。"
+               "start 为运行版本维护状态目录下的 server 符号链接，供 intellij.serverPath 使用；"
+               "升级后执行 restart 切换版本。stop/restart 会断开所有共享此服务的编辑器。",
+    )
+    parser.add_argument("command", choices=["start", "stop", "restart", "status", "logs", "eula"])
+    parser.add_argument("--server-path", default=os.environ.get("INTELLIJ_SERVER_PATH"), help="服务可执行文件路径")
+    parser.add_argument("--port", type=int, default=os.environ.get("INTELLIJ_SERVER_PORT", "9999"))
+    parser.add_argument("--state-dir", default=os.environ.get("INTELLIJ_SERVER_STATE_DIR", str(default_state / "intellij-server-service")))
+    parser.add_argument("--timeout", type=float, default=60, help="启动或停止等待秒数（默认 60）")
+    parser.add_argument("--follow", action="store_true", help="持续查看日志")
+    args = parser.parse_args(argv)
+    if not 1 <= args.port <= 65535 or not 0 < args.timeout <= 600:
+        parser.error("端口需为 1–65535，等待时间需大于 0 且不超过 600 秒。")
+    if args.follow and args.command != "logs":
+        parser.error("--follow 仅用于 logs。")
+    state = Path(args.state_dir).expanduser().resolve()
+    try:
+        if args.command == "eula":
+            path = find_server(args.server_path).parent.parent / "EULA.txt"
+            print(f"许可文件：{path}\n\n{path.read_text()}")
+            return 0
+        if args.command == "status":
+            return show_status(state)
+        if args.command == "logs":
+            return show_logs(state, args.follow)
+        with service_lock(state):
+            if args.command in {"stop", "restart"}:
+                stop_service(args, state)
+            if args.command in {"start", "restart"}:
+                start_service(args, state)
+        return 0
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"错误：{error}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

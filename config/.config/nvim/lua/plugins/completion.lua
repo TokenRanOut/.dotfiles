@@ -7,6 +7,7 @@ return {
     opts = {
       keymap = { preset = "default" },
       completion = {
+        accept = { auto_brackets = { blocked_filetypes = { "java", "kotlin" } } },
         documentation = { auto_show = true, auto_show_delay_ms = 300 },
       },
       signature = { enabled = true },

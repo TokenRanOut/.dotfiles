@@ -25,7 +25,8 @@ Each top-level directory is a **stow package** whose contents get symlinked into
 - `git/.gitconfig` — global git config with `includeIf` conditional includes
 - `vim/.vimrc`, `tmux/.tmux.conf`, `screen/.screenrc` — tool configs
 - `script/.script/bin/` — custom utility scripts
-- `config/.config/opencode/` — OpenCode AI config and skills
+- `config/.config/opencode/` — OpenCode AI config and instructions
+- `agents/.agents/skills/` — shared agent skills
 
 ## Git quirks
 
@@ -34,7 +35,7 @@ Each top-level directory is a **stow package** whose contents get symlinked into
 
 ## OpenCode config
 
-OpenCode instructions are at `config/.config/opencode/AGENTS.md`. Skills live in `config/.config/opencode/skills/`. Both are stowed to `~/.config/opencode/` on the target machine.
+OpenCode instructions are at `config/.config/opencode/AGENTS.md` and are stowed to `~/.config/opencode/AGENTS.md`. Shared skills live in `agents/.agents/skills/` and are stowed to `~/.agents/skills/`, which OpenCode discovers automatically and other compatible agents can also use.
 
 ## Website
 

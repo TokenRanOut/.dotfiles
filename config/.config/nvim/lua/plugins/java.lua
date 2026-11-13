@@ -1,6 +1,7 @@
 return {
   {
     "nvim-java/nvim-java",
+    enabled = false,
     config = function()
       local function maven_settings_from_env()
         local options = {}
